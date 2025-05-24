@@ -1,3 +1,226 @@
+# AI Interview Practice App
+
+A real-time AI-powered interview practice application built with Next.js, shadcn/ui, and Google's Gemini Live API. Practice interviews with AI interviewers from top tech companies through voice conversations.
+
+## 🚀 Features
+
+- **Real-time Voice Conversations**: Interactive voice-based interviews using Gemini Live API
+- **Multiple Interview Modes**: Pre-configured prompts for different company interviewing styles (Google, Amazon, Microsoft, etc.)
+- **Modern UI**: Built with Next.js 14 and shadcn/ui components with a sleek black/white theme
+- **WebSocket Communication**: Real-time audio streaming between frontend and backend
+- **Audio Processing**: Full-duplex audio recording and playback capabilities
+- **Session Management**: Track interview sessions and performance
+- **Supabase Integration**: Backend database for storing interview data and analytics
+
+## 🛠 Tech Stack
+
+### Frontend (Port 3000)
+- **Next.js 14** - React framework
+- **shadcn/ui** - Modern component library (converted from HeroUI)
+- **Tailwind CSS** - Utility-first CSS framework
+- **TypeScript** - Type-safe development
+- **WebSocket Client** - Real-time audio communication
+
+### Backend
+- **Python 3.12+** - Core backend language
+- **WebSocket Server** (Port 8765) - Real-time communication
+- **Google Genai SDK** - Gemini Live API integration
+- **Supabase** - Database and authentication
+- **AsyncIO** - Asynchronous programming
+
+## 📋 Prerequisites
+
+- Node.js 18+ and npm
+- Python 3.12+
+- Google API Key (for Gemini Live API)
+- Supabase account (optional, for data persistence)
+
+## 🚀 Quick Start
+
+### 1. Clone the Repository
+
+```bash
+git clone <your-repo-url>
+cd bluegeneration
+```
+
+### 2. Set Up Environment Variables
+
+```bash
+# Copy and configure environment variables
+cp .env.example .env.local
+
+# Add your Google API key
+export GOOGLE_API_KEY='your-google-api-key-here'
+```
+
+### 3. Install Dependencies
+
+**Frontend Dependencies:**
+```bash
+npm install
+```
+
+**Backend Dependencies:**
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 4. Start the Application
+
+**Terminal 1 - Start the Frontend:**
+```bash
+npm run dev
+```
+The frontend will be available at `http://localhost:3000`
+
+**Terminal 2 - Start the WebSocket Server:**
+```bash
+source venv/bin/activate  # Activate virtual environment
+python websocket_server.py
+```
+The WebSocket server will run on `ws://localhost:8765`
+
+## 🎯 How to Use
+
+1. **Open the Application**: Navigate to `http://localhost:3000`
+2. **Select Interview Type**: Choose from available interview prompts (Google, Amazon, etc.)
+3. **Start Interview**: Click "Start Interview" to begin the voice conversation
+4. **Practice**: Speak naturally - the AI interviewer will ask questions and respond in real-time
+5. **Review**: Use the built-in audio testing features to verify your setup
+
+## 📁 Project Structure
+
+```
+bluegeneration/
+├── src/                      # Next.js frontend (main app)
+│   ├── app/
+│   │   ├── page.tsx         # Home page with interview selection
+│   │   ├── interview/       # Interview session page
+│   │   └── layout.tsx       # Root layout
+│   └── components/ui/       # shadcn/ui components
+├── frontend/                # Alternative frontend (Supabase-based)
+├── websocket_server.py      # Main WebSocket server
+├── prompts.json            # Interview prompt configurations
+├── requirements.txt        # Python dependencies
+├── package.json           # Node.js dependencies
+└── README.md              # This file
+```
+
+## 🎨 UI Components
+
+The application uses **shadcn/ui** components with a custom black/white theme:
+
+- **Card Components**: Interview selection and session display
+- **Button Components**: Interactive controls with proper hover states
+- **Select Components**: Dropdown menus for prompt selection
+- **Progress Components**: Audio level indicators
+- **Badge Components**: Status indicators
+
+## 🔧 Configuration
+
+### Interview Prompts
+
+Edit `prompts.json` to customize interview scenarios:
+
+```json
+{
+  "google_interviewer": {
+    "name": "Google Technical Interviewer",
+    "system_instruction": "You are a Google technical interviewer...",
+    "description": "Practice coding and system design questions"
+  }
+}
+```
+
+### Audio Settings
+
+The application uses specific audio formats:
+- **Input**: 16kHz, mono, 16-bit PCM
+- **Output**: 24kHz, mono, 16-bit PCM
+
+## 🚀 Deployment
+
+### Frontend Deployment (Vercel)
+
+```bash
+npm run build
+# Deploy to Vercel or your preferred platform
+```
+
+### Backend Deployment
+
+The WebSocket server can be deployed to any Python-compatible hosting service. Ensure the following:
+
+1. Set environment variables
+2. Install dependencies from `requirements.txt`
+3. Configure WebSocket port (default: 8765)
+
+## 🔍 Debugging
+
+### Audio Issues
+
+If you can't hear audio responses:
+
+1. Check browser permissions for microphone
+2. Verify WebSocket connection in browser console
+3. Test audio with the built-in "Test Audio" button
+4. Check server logs for audio streaming errors
+
+### Connection Issues
+
+1. Ensure WebSocket server is running on port 8765
+2. Check if GOOGLE_API_KEY is properly set
+3. Verify network connectivity
+
+## 📝 Development Notes
+
+### Recent Changes
+
+- **Converted from HeroUI to shadcn/ui**: Complete UI component migration
+- **Fixed WebSocket Audio Streaming**: Resolved connection state issues
+- **Enhanced Error Handling**: Better debugging and error messages
+- **Improved Audio Pipeline**: More reliable audio processing
+
+### Known Issues
+
+- Audio latency may vary based on network conditions
+- Some browsers may require HTTPS for microphone access in production
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## 📄 License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## 🙏 Acknowledgments
+
+- **Google Gemini Live API** - For providing the AI conversation capabilities
+- **shadcn/ui** - For the beautiful component library
+- **Next.js Team** - For the excellent React framework
+- **Supabase** - For backend infrastructure
+
+## 📞 Support
+
+If you encounter any issues or have questions:
+
+1. Check the console logs for error messages
+2. Ensure all dependencies are properly installed
+3. Verify environment variables are set correctly
+4. Create an issue in the GitHub repository
+
+---
+
+**Happy interviewing! 🎉**
+
 # 🎤 AI Interview Practice System
 
 A real-time voice-based interview practice system using Google's Gemini Live API. Practice technical interviews with AI interviewers from top tech companies!
