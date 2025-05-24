@@ -1,0 +1,175 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 0%;
+    --foreground: 0 0% 100%;
+    --card: 0 0% 11%;
+    --card-foreground: 0 0% 100%;
+    --popover: 0 0% 11%;
+    --popover-foreground: 0 0% 100%;
+    --primary: 0 0% 100%;
+    --primary-foreground: 0 0% 0%;
+    --secondary: 0 0% 18%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 0 0% 18%;
+    --muted-foreground: 0 0% 64%;
+    --accent: 0 0% 18%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 0% 40%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 27%;
+    --input: 0 0% 18%;
+    --ring: 0 0% 83%;
+    --chart-1: 0 0% 40%;
+    --chart-2: 0 0% 60%;
+    --chart-3: 0 0% 80%;
+    --chart-4: 0 0% 90%;
+    --chart-5: 0 0% 95%;
+  }
+
+  .dark {
+    --background: 0 0% 0%;
+    --foreground: 0 0% 100%;
+    --card: 0 0% 11%;
+    --card-foreground: 0 0% 100%;
+    --popover: 0 0% 11%;
+    --popover-foreground: 0 0% 100%;
+    --primary: 0 0% 100%;
+    --primary-foreground: 0 0% 0%;
+    --secondary: 0 0% 18%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 0 0% 18%;
+    --muted-foreground: 0 0% 64%;
+    --accent: 0 0% 18%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 0% 40%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 27%;
+    --input: 0 0% 18%;
+    --ring: 0 0% 83%;
+    --chart-1: 0 0% 40%;
+    --chart-2: 0 0% 60%;
+    --chart-3: 0 0% 80%;
+    --chart-4: 0 0% 90%;
+    --chart-5: 0 0% 95%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Monochrome Scrollbars */
+.scrollbar-thin {
+  scrollbar-width: thin;
+}
+
+.scrollbar-track-neutral-800::-webkit-scrollbar-track {
+  background: rgb(38, 38, 38);
+  border-radius: 6px;
+}
+
+.scrollbar-thumb-neutral-600::-webkit-scrollbar-thumb {
+  background: rgb(82, 82, 82);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.scrollbar-thumb-neutral-600::-webkit-scrollbar-thumb:hover {
+  background: rgb(115, 115, 115);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgb(38, 38, 38);
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgb(82, 82, 82);
+  border-radius: 6px;
+  border: 1px solid rgb(38, 38, 38);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(115, 115, 115);
+}
+
+::-webkit-scrollbar-corner {
+  background: rgb(38, 38, 38);
+}
+
+/* Glass morphism enhancements */
+.backdrop-blur-xl {
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+
+/* Smooth animations */
+.animate-in {
+  animation: slide-in-from-bottom 0.3s ease-out;
+}
+
+@keyframes slide-in-from-bottom {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Custom focus states for monochrome theme */
+.focus\:ring-white\/20:focus {
+  --tw-ring-color: rgba(255, 255, 255, 0.2);
+}
+
+.focus\:border-white:focus {
+  border-color: rgb(255, 255, 255);
+}
+
+/* Monochrome selection styles */
+::selection {
+  background-color: rgba(255, 255, 255, 0.3);
+  color: rgb(0, 0, 0);
+}
+
+::-moz-selection {
+  background-color: rgba(255, 255, 255, 0.3);
+  color: rgb(0, 0, 0);
+}
+
+/* Enhanced shadows for monochrome theme */
+.shadow-2xl {
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.9);
+}
+
+/* Button rounded corners override */
+button {
+  border-radius: 0.5rem !important;
+}
+
+/* Rounded corners for all interactive elements */
+.rounded-lg {
+  border-radius: 0.5rem;
+}
+
+input, select, textarea {
+  border-radius: 0.5rem;
+}
