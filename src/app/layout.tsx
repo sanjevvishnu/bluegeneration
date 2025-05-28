@@ -18,9 +18,7 @@ export default function RootLayout({
       </head>
       <body>
         <NextThemesProvider attribute="class" defaultTheme="dark">
-          <main className="min-h-screen bg-background text-foreground transition-colors duration-300">
-            {children}
-          </main>
+          {children}
         </NextThemesProvider>
       </body>
     </html>
