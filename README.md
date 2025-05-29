@@ -84,6 +84,38 @@ npm run dev
 
 The app will be available at `http://localhost:3001`
 
+## 🌐 **Production Deployment**
+
+### **Quick Deploy**
+```bash
+# Use the deployment script
+./deploy.sh
+```
+
+### **Manual Deployment**
+
+**Frontend (Vercel):**
+```bash
+# Install Vercel CLI
+npm install -g vercel
+
+# Deploy frontend
+vercel --prod
+
+# Set environment variable
+vercel env add NEXT_PUBLIC_WS_URL production
+# Enter: wss://your-backend-url.com
+```
+
+**Backend (Railway/Render):**
+1. Connect your GitHub repo to [Railway](https://railway.app) or [Render](https://render.com)
+2. Set environment variables:
+   - `GOOGLE_API_KEY=your_gemini_api_key`
+   - `PORT=8765`
+3. Deploy automatically
+
+📖 **See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed instructions**
+
 ## 🎯 Components Overview
 
 ### **UI Components** (`frontend/src/components/ui/`)

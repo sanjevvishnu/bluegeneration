@@ -359,7 +359,11 @@ Remember: This is a real-time voice conversation with natural interruptions."""
             traceback.print_exc()
 
 async def main():
-    print("🚀 Starting WebSocket server on localhost:8765")
+    # Get configuration from environment variables
+    HOST = os.getenv('HOST', '0.0.0.0')  # Allow external connections in production
+    PORT = int(os.getenv('PORT', 8765))
+    
+    print(f"🚀 Starting WebSocket server on {HOST}:{PORT}")
     
     # Start WebSocket server
     async def handle_connection(websocket, path=None):
@@ -368,13 +372,14 @@ async def main():
     
     server = await websockets.serve(
         handle_connection,
-        "localhost", 
-        8765,
+        HOST, 
+        PORT,
         ping_interval=20,
-        ping_timeout=10
+        ping_timeout=10,
+        close_timeout=10
     )
     
-    print("🌐 WebSocket server is running. Open index.html in your browser.")
+    print(f"🌐 WebSocket server is running on ws://{HOST}:{PORT}")
     print("🔑 Make sure GOOGLE_API_KEY environment variable is set!")
     print("🎤 Server expects raw PCM audio: 16kHz, mono, 16-bit samples")
     print("🎵 Server outputs raw PCM audio: 24kHz, mono, 16-bit samples")

@@ -141,7 +141,8 @@ export function useInterviewSession({
       console.log('🚀 Starting interview session...')
 
       // Create WebSocket connection to websocket_server.py
-      const ws = new WebSocket('ws://localhost:8765')
+      const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8765'
+      const ws = new WebSocket(wsUrl)
       wsRef.current = ws
 
       ws.onopen = () => {

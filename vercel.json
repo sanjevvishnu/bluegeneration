@@ -1,0 +1,24 @@
+{
+  "name": "ai-interview-practice",
+  "version": 2,
+  "builds": [
+    {
+      "src": "frontend/package.json",
+      "use": "@vercel/next"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "frontend/$1"
+    }
+  ],
+  "functions": {
+    "frontend/**": {
+      "includeFiles": "frontend/**"
+    }
+  },
+  "env": {
+    "NEXT_PUBLIC_WS_URL": "@next_public_ws_url"
+  }
+} 
