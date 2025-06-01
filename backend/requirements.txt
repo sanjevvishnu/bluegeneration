@@ -1,32 +1,27 @@
 # Core Web Framework
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-websockets==12.0
+fastapi
+uvicorn[standard]
+websockets
 
 # Supabase (Database)
-supabase==2.0.2
+supabase
 
-# Google Gemini Live API (using new google-genai SDK)
+# Google Gemini Live API
 google-genai
 
-# Audio processing (from Google cookbook)
+# Audio processing
 pyaudio
-opencv-python
 
 # Environment and Configuration
-python-dotenv==1.0.0
+python-dotenv
 
 # HTTP Client
-aiohttp==3.11.11
+aiohttp
+requests
 
-# Development and Utilities
-asyncio-taskgroup==0.7.2; python_version < "3.11"
-exceptiongroup==1.2.0; python_version < "3.11"
+# Data processing
+pydantic
+numpy
 
-# Additional dependencies
-pydantic==2.5.0
-numpy==1.24.3
-Pillow==10.1.0
-asyncpg==0.29.0
-mss
-asyncio 
+# Database
+asyncpg 

@@ -38,6 +38,7 @@ interface WebSocketMessage {
 interface UseInterviewSessionProps {
   prompt: InterviewPrompt | null
   onEnd: () => void
+  userId?: string
 }
 
 interface UseInterviewSessionReturn {
@@ -52,6 +53,10 @@ interface UseInterviewSessionReturn {
   startRecording: () => Promise<void>
   stopRecording: () => void
   sendTextMessage: (message: string) => void
+  requestFullTranscript: () => void
+  saveTranscriptToAPI: (sessionId?: string) => Promise<any>
+  getTranscriptFromAPI: (sessionId: string) => Promise<any>
+  listTranscriptsFromAPI: () => Promise<any>
 }
 
 // Audio queue management for proper interruption handling
@@ -61,9 +66,31 @@ interface AudioQueueItem {
   id: string
 }
 
+// Utility function to convert base64 to ArrayBuffer
+const base64ToArrayBuffer = (base64: string): ArrayBuffer => {
+  const binaryString = window.atob(base64)
+  const len = binaryString.length
+  const bytes = new Uint8Array(len)
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i)
+  }
+  return bytes.buffer
+}
+
+// Utility function to convert ArrayBuffer to base64
+const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i])
+  }
+  return window.btoa(binary)
+}
+
 export function useInterviewSession({ 
   prompt, 
-  onEnd 
+  onEnd,
+  userId
 }: UseInterviewSessionProps): UseInterviewSessionReturn {
   // Session state
   const [session, setSession] = useState<InterviewSession | null>(null)
@@ -134,28 +161,48 @@ export function useInterviewSession({
 
   // Start session
   const startSession = useCallback(async () => {
-    if (isConnected) return
+    console.log('🔍 startSession called - checking state...')
+    console.log('📊 Current state:', { isConnected, prompt: prompt?.id, userId })
+    
+    if (isConnected) {
+      console.log('⚠️ Session already connected, skipping start')
+      return
+    }
 
     try {
       setError(null)
       console.log('🚀 Starting interview session...')
+      console.log('👤 User ID being sent:', userId)
+      console.log('📝 Prompt being used:', prompt?.id)
 
-      // Create WebSocket connection to websocket_server.py
-      const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8765'
+      // Create WebSocket connection to Supabase FastAPI backend
+      const wsBaseUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3000/ws'
+      const sessionId = sessionIdRef.current
+      const wsUrl = `${wsBaseUrl}/${sessionId}`
       const ws = new WebSocket(wsUrl)
       wsRef.current = ws
 
       ws.onopen = () => {
-        console.log('✅ Connected to WebSocket server')
+        console.log('✅ Connected to Supabase FastAPI WebSocket server')
         
-        // Send prompt selection if available
-        if (prompt) {
-          ws.send(JSON.stringify({
-            type: 'prompt_selection',
-            prompt: prompt.id
-          }))
-          console.log(`📝 Sent prompt selection: ${prompt.id}`)
+        // Send session creation request with prompt selection and user info
+        const mode = prompt?.id || 'amazon_interviewer'
+        const sessionData: any = {
+          mode: mode,
+          session_id: sessionId
         }
+        
+        // Add user_id if provided (from Clerk authentication)
+        if (userId) {
+          sessionData.user_id = userId
+          console.log(`🔗 Creating session for user: ${userId}`)
+        }
+        
+        ws.send(JSON.stringify({
+          type: 'create_session',
+          data: sessionData
+        }))
+        console.log(`📝 Sent session creation request: ${mode}`)
         
         setIsConnected(true)
       }
@@ -169,9 +216,51 @@ export function useInterviewSession({
             
             if (data.type === 'error') {
               setError(data.data?.message || 'Unknown error')
-            } else if (data.type === 'prompt_configured') {
-              console.log('✅ Prompt configured successfully')
-              setSession((prev: InterviewSession | null) => prev ? { ...prev, status: 'active' } : null)
+            } else if (data.type === 'session_created') {
+              console.log('✅ Session created successfully')
+              setSession({
+                id: sessionId,
+                promptId: prompt?.id || 'amazon_interviewer',
+                startTime: new Date(),
+                status: 'active',
+                transcript: []
+              })
+            } else if (data.type === 'transcript') {
+              // Handle real-time transcript entries from backend
+              console.log('📝 Received transcript entry:', data.data)
+              const transcriptEntry: TranscriptEntry = {
+                id: data.data.id || `entry_${Date.now()}`,
+                speaker: data.data.speaker === 'User' ? 'user' : 'ai',
+                content: data.data.text || data.data.content,
+                timestamp: new Date()
+              }
+              setTranscript(prev => [...prev, transcriptEntry])
+              console.log(`📝 Added ${transcriptEntry.speaker} transcript: "${transcriptEntry.content}"`)
+            } else if (data.type === 'text_response') {
+              // Handle AI text response
+              console.log('🤖 Received AI text response:', data.data)
+              const aiEntry: TranscriptEntry = {
+                id: `ai_${Date.now()}`,
+                speaker: 'ai',
+                content: data.data.text,
+                timestamp: new Date()
+              }
+              setTranscript(prev => [...prev, aiEntry])
+            } else if (data.type === 'audio_response') {
+              // Handle AI audio response
+              console.log('🔊 Received AI audio response')
+              if (data.data.audio) {
+                try {
+                  const audioBuffer = base64ToArrayBuffer(data.data.audio)
+                  queueAudioChunk(audioBuffer)
+                } catch (err) {
+                  console.error('❌ Error processing audio response:', err)
+                }
+              }
+            } else if (data.type === 'session_ended') {
+              // Handle session end
+              console.log('🔚 Session ended')
+              setSession(prev => prev ? { ...prev, status: 'completed', endTime: new Date() } : null)
             }
           } else if (event.data instanceof Blob) {
             // Binary audio data from Gemini Live API
@@ -204,7 +293,7 @@ export function useInterviewSession({
       console.error('❌ Error starting session:', err)
       setError(`Failed to start session: ${err}`)
     }
-  }, [isConnected, prompt])
+  }, [isConnected, prompt, userId])
 
   // Queue audio chunk for sequential playback with interruption support
   const queueAudioChunk = useCallback(async (arrayBuffer: ArrayBuffer) => {
@@ -487,6 +576,15 @@ export function useInterviewSession({
   // End session
   const endSession = useCallback(() => {
     console.log('🔚 Ending interview session...')
+    
+    // Send end session message to backend
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'end_session'
+      }))
+      console.log('📤 Sent end session request to backend')
+    }
+    
     cleanup()
     onEnd()
   }, [cleanup, onEnd])
@@ -548,9 +646,15 @@ export function useInterviewSession({
             int16Array[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32767))
           }
           
-          // Send raw PCM data directly to websocket_server.py
+          // Send base64 encoded PCM data to Supabase backend
           if (wsRef.current?.readyState === WebSocket.OPEN) {
-            wsRef.current.send(int16Array.buffer)
+            const audioBase64 = arrayBufferToBase64(int16Array.buffer)
+            wsRef.current.send(JSON.stringify({
+              type: 'audio_data',
+              data: {
+                audio: audioBase64
+              }
+            }))
           }
         }
       }
@@ -604,14 +708,94 @@ export function useInterviewSession({
     
     setTranscript(prev => [...prev, userEntry])
 
-    // Send to backend
+    // Send to Supabase backend
     wsRef.current.send(JSON.stringify({
-      type: 'text_message',
+      type: 'text_input',
       data: {
-        session_id: sessionIdRef.current,
         text: message.trim()
       }
     }))
+  }, [])
+
+  // Request full transcript from backend
+  const requestFullTranscript = useCallback(() => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+
+    console.log('📝 Requesting full transcript from backend...')
+    wsRef.current.send(JSON.stringify({
+      type: 'get_transcript'
+    }))
+  }, [])
+
+  // Save transcript to API endpoint (Supabase backend saves automatically)
+  const saveTranscriptToAPI = useCallback(async (sessionId?: string) => {
+    try {
+      console.log('📝 Transcript is saved automatically by Supabase backend')
+      return {
+        session_id: sessionId || sessionIdRef.current,
+        transcript: transcript,
+        message: 'Transcripts are saved automatically by the backend'
+      }
+    } catch (error) {
+      console.error('❌ Error accessing transcript:', error)
+      throw error
+    }
+  }, [transcript])
+
+  // Get transcript from API endpoint
+  const getTranscriptFromAPI = useCallback(async (sessionId: string) => {
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000'
+      
+      console.log('📥 Fetching conversation from API:', `${apiUrl}/api/conversations/${sessionId}`)
+      const response = await fetch(`${apiUrl}/api/conversations/${sessionId}`)
+
+      if (response.ok) {
+        const result = await response.json()
+        console.log('✅ Conversation retrieved successfully:', result)
+        
+        // Convert timestamps back to Date objects
+        const transcriptEntries = result.transcripts?.map((entry: any) => ({
+          id: entry.id || `entry_${Date.now()}`,
+          speaker: entry.speaker === 'User' ? 'user' : 'ai',
+          content: entry.text,
+          timestamp: new Date(entry.created_at)
+        })) || []
+        
+        setTranscript(transcriptEntries)
+        return result
+      } else {
+        const error = await response.text()
+        console.error('❌ Failed to get conversation:', error)
+        throw new Error(`Failed to get conversation: ${error}`)
+      }
+    } catch (error) {
+      console.error('❌ Error getting conversation:', error)
+      throw error
+    }
+  }, [])
+
+  // List all conversations from API endpoint  
+  const listTranscriptsFromAPI = useCallback(async () => {
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000'
+      
+      console.log('📋 Fetching conversations list from API:', `${apiUrl}/api/conversations`)
+      const response = await fetch(`${apiUrl}/api/conversations`)
+
+      if (response.ok) {
+        const result = await response.json()
+        console.log('✅ Conversations list retrieved successfully:', result)
+        return result
+      } else {
+        const error = await response.text()
+        console.error('❌ Failed to get conversations list:', error)
+        throw new Error(`Failed to get conversations list: ${error}`)
+      }
+    } catch (error) {
+      console.error('❌ Error getting conversations list:', error)
+      throw error
+    }
   }, [])
 
   // Cleanup on unmount
@@ -630,6 +814,10 @@ export function useInterviewSession({
     endSession,
     startRecording,
     stopRecording,
-    sendTextMessage
+    sendTextMessage,
+    requestFullTranscript,
+    saveTranscriptToAPI,
+    getTranscriptFromAPI,
+    listTranscriptsFromAPI
   }
 } 

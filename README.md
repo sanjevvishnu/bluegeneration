@@ -1,4 +1,4 @@
-# AI Interview Practice App 🚀
+# Coimbatore 🚀
 
 A clean, well-organized AI-powered interview practice application built with modern React/Next.js architecture. Practice technical interviews with AI interviewers from top tech companies through realistic voice conversations.
 
@@ -216,7 +216,7 @@ Edit `prompts.json` to add new interview configurations:
 
 This project is open source and available under the MIT License.
 
-## 🎤 AI Interview Practice System
+## 🎤 Coimbatore Interview Practice System
 
 A real-time voice-based interview practice system using Google's Gemini Live API. Practice technical interviews with AI interviewers from top tech companies!
 

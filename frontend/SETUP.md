@@ -1,4 +1,4 @@
-# AI Interview Practice Frontend - Setup Guide
+# Coimbatore Frontend - Setup Guide
 
 ## 🎯 **Overview**
 This is your **clean, organized frontend** with full backend integration using the same WebSocket approach as the original app.

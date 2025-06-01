@@ -83,7 +83,7 @@ export function InterviewSession({ prompt, onEnd }: InterviewSessionProps) {
             
             <div className="text-xs text-muted-foreground">
               <p>• Ensure microphone access is allowed</p>
-              <p>• Make sure the backend is running on port 3000</p>
+              <p>• Make sure the Supabase backend is running on port 3000</p>
               <p>• Use headphones to prevent audio feedback</p>
             </div>
           </CardContent>
