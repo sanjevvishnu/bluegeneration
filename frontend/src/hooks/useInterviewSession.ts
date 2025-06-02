@@ -116,6 +116,10 @@ export function useInterviewSession({
   const audioQueueRef = useRef<AudioQueueItem[]>([])
   const isPlayingAudioRef = useRef(false)
   const currentAudioSourceRef = useRef<AudioBufferSourceNode | null>(null)
+  
+  // Continuous audio buffer for smooth playback
+  const audioBufferQueue = useRef<ArrayBuffer[]>([])
+  const isBufferProcessingRef = useRef(false)
 
   // Cleanup function
   const cleanup = useCallback(() => {
@@ -135,6 +139,7 @@ export function useInterviewSession({
     
     // Clear audio queue and stop current playback
     audioQueueRef.current = []
+    audioBufferQueue.current = []
     if (currentAudioSourceRef.current) {
       try {
         currentAudioSourceRef.current.stop()
@@ -144,6 +149,7 @@ export function useInterviewSession({
       currentAudioSourceRef.current = null
     }
     isPlayingAudioRef.current = false
+    isBufferProcessingRef.current = false
     
     // Close WebSocket
     if (wsRef.current) {
@@ -176,9 +182,18 @@ export function useInterviewSession({
       console.log('📝 Prompt being used:', prompt?.id)
 
       // Create WebSocket connection to Supabase FastAPI backend
-      const wsBaseUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3000/ws'
+      const wsBaseUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3000'
       const sessionId = sessionIdRef.current
-      const wsUrl = `${wsBaseUrl}/${sessionId}`
+      const wsUrl = `${wsBaseUrl}/ws/${sessionId}`
+      
+      console.log('🔗 WebSocket connection details:', {
+        wsBaseUrl,
+        sessionId,
+        wsUrl,
+        envWsUrl: process.env.NEXT_PUBLIC_WS_URL,
+        envApiUrl: process.env.NEXT_PUBLIC_API_URL
+      })
+      
       const ws = new WebSocket(wsUrl)
       wsRef.current = ws
 
@@ -248,7 +263,6 @@ export function useInterviewSession({
               setTranscript(prev => [...prev, aiEntry])
             } else if (data.type === 'audio_response') {
               // Handle AI audio response
-              console.log('🔊 Received AI audio response')
               if (data.data.audio) {
                 try {
                   const audioBuffer = base64ToArrayBuffer(data.data.audio)
@@ -264,11 +278,9 @@ export function useInterviewSession({
             }
           } else if (event.data instanceof Blob) {
             // Binary audio data from Gemini Live API
-            console.log('🔊 Received audio blob:', event.data.size, 'bytes')
             event.data.arrayBuffer().then(queueAudioChunk)
           } else if (event.data instanceof ArrayBuffer) {
             // Direct binary audio data
-            console.log('🔊 Received audio buffer:', event.data.byteLength, 'bytes')
             queueAudioChunk(event.data)
           }
         } catch (err) {
@@ -277,15 +289,30 @@ export function useInterviewSession({
       }
 
       ws.onerror = (error) => {
-        console.error('❌ WebSocket error:', error)
-        setError('WebSocket connection error')
+        console.error('❌ WebSocket error details:', {
+          error,
+          readyState: ws.readyState,
+          url: wsUrl,
+          type: error.type,
+          target: error.target,
+          timestamp: new Date().toISOString()
+        })
+        setError(`WebSocket connection error: Failed to connect to ${wsUrl}`)
       }
 
       ws.onclose = (event) => {
-        console.log('🔌 WebSocket connection closed:', event.code, event.reason)
+        console.log('🔌 WebSocket connection closed:', {
+          code: event.code,
+          reason: event.reason,
+          wasClean: event.wasClean,
+          url: wsUrl,
+          timestamp: new Date().toISOString()
+        })
         setIsConnected(false)
         if (event.code !== 1000) { // Not normal closure
-          setError('Connection lost')
+          const errorMsg = event.reason || `Connection lost (code: ${event.code})`
+          console.error('🚨 WebSocket closed abnormally:', errorMsg)
+          setError(errorMsg)
         }
       }
 
@@ -295,37 +322,45 @@ export function useInterviewSession({
     }
   }, [isConnected, prompt, userId])
 
-  // Queue audio chunk for sequential playback with interruption support
+  // Queue audio chunk for continuous playback
   const queueAudioChunk = useCallback(async (arrayBuffer: ArrayBuffer) => {
     try {
-      console.log(`🎵 Queueing audio chunk: ${arrayBuffer.byteLength} bytes`)
+      // Add to buffer queue
+      audioBufferQueue.current.push(arrayBuffer)
       
-      const audioItem: AudioQueueItem = {
-        data: arrayBuffer,
-        timestamp: Date.now(),
-        id: Math.random().toString(36).substr(2, 9)
-      }
-      
-      audioQueueRef.current.push(audioItem)
-      console.log(`📥 Audio queue length: ${audioQueueRef.current.length}`)
-      
-      // Start processing queue if not already playing
-      if (!isPlayingAudioRef.current) {
-        processAudioQueue()
+      // Start processing if not already doing so
+      if (!isBufferProcessingRef.current) {
+        processAudioBuffer()
       }
     } catch (error) {
       console.error('❌ Error queueing audio chunk:', error)
     }
   }, [])
 
-  // Process audio queue sequentially
-  const processAudioQueue = useCallback(async () => {
-    if (isPlayingAudioRef.current || audioQueueRef.current.length === 0) {
+  // Process audio buffer for continuous playback
+  const processAudioBuffer = useCallback(async () => {
+    if (isBufferProcessingRef.current || audioBufferQueue.current.length === 0) {
       return
     }
 
-    console.log('🎶 Starting audio queue processing...')
-    isPlayingAudioRef.current = true
+    // Wait for minimum buffer size or timeout to reduce micro-chunks
+    const minBufferSize = 1024 // bytes
+    const maxWaitTime = 100 // ms
+    const startTime = Date.now()
+    
+    while (audioBufferQueue.current.length > 0) {
+      const totalBuffered = audioBufferQueue.current.reduce((sum, chunk) => sum + chunk.byteLength, 0)
+      
+      // Process if we have enough data or waited long enough
+      if (totalBuffered >= minBufferSize || (Date.now() - startTime) >= maxWaitTime) {
+        break
+      }
+      
+      // Brief wait for more chunks
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+
+    isBufferProcessingRef.current = true
 
     if (!audioContextRef.current) {
       audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)()
@@ -334,34 +369,47 @@ export function useInterviewSession({
     // Resume audio context if suspended
     if (audioContextRef.current.state === 'suspended') {
       await audioContextRef.current.resume()
-      console.log('🔊 Audio context resumed for queue processing')
     }
 
     try {
-      while (audioQueueRef.current.length > 0) {
-        const audioItem = audioQueueRef.current.shift()
-        if (!audioItem) break
-
-        console.log(`🎵 Playing audio chunk ${audioItem.id}: ${audioItem.data.byteLength} bytes`)
-        
-        // Play audio chunk and wait for it to complete
-        await playAudioChunkSequentially(audioItem.data)
-        
-        console.log(`✅ Completed audio chunk ${audioItem.id}`)
-        
-        // Small delay between chunks to prevent audio artifacts
-        await new Promise(resolve => setTimeout(resolve, 50))
+      // Concatenate all pending audio chunks into one continuous buffer
+      const chunks = audioBufferQueue.current.splice(0) // Take all chunks and clear queue
+      if (chunks.length === 0) {
+        isBufferProcessingRef.current = false
+        return
       }
+
+      // Calculate total size
+      const totalSize = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0)
+      
+      // Create single concatenated buffer
+      const concatenatedBuffer = new ArrayBuffer(totalSize)
+      const concatenatedView = new Uint8Array(concatenatedBuffer)
+      let offset = 0
+      
+      for (const chunk of chunks) {
+        concatenatedView.set(new Uint8Array(chunk), offset)
+        offset += chunk.byteLength
+      }
+
+      // Play the concatenated audio
+      await playContinuousAudio(concatenatedBuffer)
+      
     } catch (error) {
-      console.error('❌ Error processing audio queue:', error)
+      console.error('❌ Error processing audio buffer:', error)
     } finally {
-      console.log('🎶 Audio queue processing completed')
-      isPlayingAudioRef.current = false
+      isBufferProcessingRef.current = false
+      
+      // Check if more chunks arrived while processing
+      if (audioBufferQueue.current.length > 0) {
+        // Schedule next processing
+        setTimeout(() => processAudioBuffer(), 10)
+      }
     }
   }, [])
 
-  // Play audio chunk sequentially (wait for completion)
-  const playAudioChunkSequentially = useCallback(async (arrayBuffer: ArrayBuffer): Promise<void> => {
+  // Play concatenated audio for continuous playback
+  const playContinuousAudio = useCallback(async (arrayBuffer: ArrayBuffer): Promise<void> => {
     return new Promise((resolve, reject) => {
       try {
         if (!audioContextRef.current) {
@@ -375,7 +423,6 @@ export function useInterviewSession({
         const numSamples = arrayBuffer.byteLength / bytesPerSample
         
         if (numSamples === 0) {
-          console.warn('⚠️ Empty audio buffer received')
           resolve()
           return
         }
@@ -397,18 +444,15 @@ export function useInterviewSession({
         
         // Set up completion handler
         source.onended = () => {
-          console.log(`🔊 Audio chunk completed: ${numSamples} samples`)
           currentAudioSourceRef.current = null
           resolve()
         }
         
-        // Start playback immediately (not scheduled)
+        // Start playback immediately
         source.start()
         
-        console.log(`🔊 Started playing audio: ${numSamples} samples at ${sampleRate}Hz`)
-        
       } catch (error) {
-        console.error('❌ Error playing sequential audio chunk:', error)
+        console.error('❌ Error playing continuous audio:', error)
         reject(error)
       }
     })
@@ -416,161 +460,25 @@ export function useInterviewSession({
 
   // Clear audio queue and stop current playback (for interruptions)
   const clearAudioQueue = useCallback(() => {
-    console.log('⚡ Clearing audio queue due to interruption - stopping all AI audio')
+    console.log('⚡ Clearing audio queue due to interruption')
     
-    // Clear the queue
-    const queueLength = audioQueueRef.current.length
+    // Clear both queues
     audioQueueRef.current = []
+    audioBufferQueue.current = []
     
     // Stop current audio playback immediately
     if (currentAudioSourceRef.current) {
       try {
         currentAudioSourceRef.current.stop()
-        console.log('🛑 Stopped current audio source')
       } catch (e) {
         // Source might already be stopped
-        console.log('⚠️ Audio source was already stopped')
       }
       currentAudioSourceRef.current = null
     }
     
     // Reset playback state
     isPlayingAudioRef.current = false
-    
-    console.log(`✅ Audio queue cleared: removed ${queueLength} pending audio chunks`)
-  }, [])
-
-  // Play raw PCM audio directly
-  const playRawPCMAudio = useCallback(async (arrayBuffer: ArrayBuffer) => {
-    try {
-      console.log('🔊 playRawPCMAudio called with', arrayBuffer.byteLength, 'bytes')
-      
-      if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)()
-        console.log('🎧 Created new AudioContext')
-      }
-
-      // Resume audio context if it's suspended (required by browsers)
-      if (audioContextRef.current.state === 'suspended') {
-        await audioContextRef.current.resume()
-        console.log('🔊 Audio context resumed, state:', audioContextRef.current.state)
-      }
-
-      // Handle raw PCM data from Gemini Live API (24kHz, 16-bit, mono)
-      const sampleRate = 24000
-      const channels = 1
-      const bytesPerSample = 2
-      const numSamples = arrayBuffer.byteLength / bytesPerSample
-      
-      console.log(`🎵 Audio specs: ${numSamples} samples, ${sampleRate}Hz, ${channels} channel(s)`)
-
-      if (numSamples > 0) {
-        const audioBuffer = audioContextRef.current.createBuffer(channels, numSamples, sampleRate)
-        const channelData = audioBuffer.getChannelData(0)
-        
-        const int16Array = new Int16Array(arrayBuffer)
-        for (let i = 0; i < numSamples; i++) {
-          channelData[i] = int16Array[i] / 32768.0
-        }
-        
-        const source = audioContextRef.current.createBufferSource()
-        source.buffer = audioBuffer
-        source.connect(audioContextRef.current.destination)
-        source.start()
-        
-        console.log(`🔊 Playing audio: ${numSamples} samples at ${sampleRate}Hz`)
-      } else {
-        console.warn('⚠️ Empty audio buffer received')
-      }
-    } catch (error) {
-      console.error('❌ Error playing raw PCM audio:', error)
-    }
-  }, [])
-
-  // Play test audio to verify Web Audio API
-  const playTestAudio = useCallback(async () => {
-    try {
-      console.log('🧪 Playing test audio (440Hz tone)...')
-      
-      if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)()
-      }
-
-      if (audioContextRef.current.state === 'suspended') {
-        await audioContextRef.current.resume()
-      }
-
-      // Create a 1-second 440Hz tone
-      const sampleRate = audioContextRef.current.sampleRate
-      const duration = 1.0
-      const numSamples = Math.floor(sampleRate * duration)
-      
-      const audioBuffer = audioContextRef.current.createBuffer(1, numSamples, sampleRate)
-      const channelData = audioBuffer.getChannelData(0)
-      
-      for (let i = 0; i < numSamples; i++) {
-        channelData[i] = Math.sin(2 * Math.PI * 440 * i / sampleRate) * 0.3
-      }
-      
-      const source = audioContextRef.current.createBufferSource()
-      source.buffer = audioBuffer
-      source.connect(audioContextRef.current.destination)
-      source.start()
-      
-      console.log('✅ Test audio played successfully')
-    } catch (error) {
-      console.error('❌ Error playing test audio:', error)
-    }
-  }, [])
-
-  // Play audio chunk
-  const playAudioChunk = useCallback(async (audioBase64: string) => {
-    try {
-      if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)()
-      }
-
-      // Resume audio context if it's suspended (required by browsers)
-      if (audioContextRef.current.state === 'suspended') {
-        await audioContextRef.current.resume()
-        console.log('🔊 Audio context resumed')
-      }
-
-      const audioData = atob(audioBase64)
-      const arrayBuffer = new ArrayBuffer(audioData.length)
-      const view = new Uint8Array(arrayBuffer)
-      
-      for (let i = 0; i < audioData.length; i++) {
-        view[i] = audioData.charCodeAt(i)
-      }
-
-      // Handle raw PCM data from Gemini Live API (24kHz, 16-bit, mono)
-      const sampleRate = 24000
-      const channels = 1
-      const bytesPerSample = 2
-      const numSamples = arrayBuffer.byteLength / bytesPerSample
-      
-      if (numSamples > 0) {
-        const audioBuffer = audioContextRef.current.createBuffer(channels, numSamples, sampleRate)
-        const channelData = audioBuffer.getChannelData(0)
-        
-        const int16Array = new Int16Array(arrayBuffer)
-        for (let i = 0; i < numSamples; i++) {
-          channelData[i] = int16Array[i] / 32768.0
-        }
-        
-        const source = audioContextRef.current.createBufferSource()
-        source.buffer = audioBuffer
-        source.connect(audioContextRef.current.destination)
-        source.start()
-        
-        console.log(`🔊 Playing audio: ${numSamples} samples at ${sampleRate}Hz`)
-      } else {
-        console.warn('⚠️ Empty audio buffer received')
-      }
-    } catch (error) {
-      console.error('❌ Error playing audio chunk:', error)
-    }
+    isBufferProcessingRef.current = false
   }, [])
 
   // End session

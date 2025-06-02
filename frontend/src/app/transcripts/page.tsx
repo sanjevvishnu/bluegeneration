@@ -29,8 +29,9 @@ export default function TranscriptPage() {
     setError(null)
 
     try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000'
       const response = await fetch(
-        `http://localhost:3000/api/transcripts/${id}?format=conversation`
+        `${apiUrl}/api/transcripts/${id}?format=conversation`
       )
       
       if (!response.ok) {

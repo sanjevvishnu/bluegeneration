@@ -62,16 +62,16 @@ class SimpleSupabaseBackend:
         # Environment variables
         self.gemini_api_key = os.getenv('GOOGLE_API_KEY')
         self.supabase_url = os.getenv('SUPABASE_URL')
-        self.supabase_key = os.getenv('SUPABASE_ANON_KEY')
+        self.supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY')  # Use service role key to bypass RLS
         
         # Initialize Supabase client
         if not self.supabase_url or not self.supabase_key:
-            print("❌ SUPABASE_URL and SUPABASE_ANON_KEY must be set in .env file")
+            print("❌ SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in .env file")
             print("📝 Get these from: https://supabase.com/dashboard/project/[project-id]/settings/api")
             self.supabase = None
         else:
             self.supabase: Client = create_client(self.supabase_url, self.supabase_key)
-            print("✅ Supabase client initialized")
+            print("✅ Supabase client initialized with Service Role Key (bypasses RLS)")
         
         # Initialize Gemini client
         self.gemini_client = None
@@ -98,6 +98,9 @@ class SimpleSupabaseBackend:
         
         # Transcript accumulation for complete responses
         self.transcript_buffers: Dict[str, Dict[str, str]] = {}  # session_id -> {speaker: accumulated_text}
+        
+        # Transcript timing for buffer management
+        self.transcript_timers: Dict[str, Dict[str, Any]] = {}  # session_id -> {speaker: timer_info}
         
         # Load interview prompts
         self.prompts = self.load_prompts()
@@ -208,32 +211,17 @@ class SimpleSupabaseBackend:
     async def add_transcript(self, session_id: str, speaker: str, text: str, provider: str = None, confidence_score: float = None, user_id: str = None):
         """Add a transcript entry with optional user association"""
         if not self.supabase:
-            print(f"❌ Supabase client not available for transcript - session {session_id}")
             return None
             
         try:
-            print(f"🔍 Adding transcript for session {session_id}, speaker: {speaker}, text: {text[:30]}...")
-            
             # Get conversation ID from session_id
-            print(f"📋 Looking up conversation for session {session_id}")
             conversation = self.supabase.table('conversations').select('id, user_id').eq('session_id', session_id).execute()
             
             if not conversation.data:
-                print(f"❌ No conversation found for session {session_id}")
-                
-                # Let's also check if there are ANY conversations in the database
-                all_conversations = self.supabase.table('conversations').select('session_id').execute()
-                print(f"🔍 Total conversations in database: {len(all_conversations.data) if all_conversations.data else 0}")
-                if all_conversations.data:
-                    recent_sessions = [conv['session_id'] for conv in all_conversations.data[-3:]]
-                    print(f"🔍 Recent session IDs: {recent_sessions}")
-                
                 return None
             
             conversation_id = conversation.data[0]['id']
             conversation_user_id = conversation.data[0].get('user_id')
-            
-            print(f"✅ Found conversation {conversation_id} for session {session_id}")
             
             # Prepare transcript data
             transcript_data = {
@@ -245,26 +233,37 @@ class SimpleSupabaseBackend:
                 'confidence_score': confidence_score
             }
             
-            # Add user_id if available (from conversation or provided)
+            # Handle user_id conversion (Clerk user ID to UUID)
+            final_user_id = None
+            
             if user_id:
-                transcript_data['user_id'] = user_id
+                # Check if this looks like a Clerk user ID (starts with "user_")
+                if user_id.startswith('user_'):
+                    # Look up the user by clerk_user_id to get their UUID
+                    user_query = self.supabase.table('users').select('id').eq('clerk_user_id', user_id).execute()
+                    
+                    if user_query.data:
+                        final_user_id = user_query.data[0]['id']
+                    else:
+                        pass
+                else:
+                    # Assume it's already a UUID
+                    final_user_id = user_id
             elif conversation_user_id:
-                transcript_data['user_id'] = conversation_user_id
+                final_user_id = conversation_user_id
+            
+            if final_user_id:
+                transcript_data['user_id'] = final_user_id
             
             result = self.supabase.table('transcripts').insert(transcript_data).execute()
             
             if result.data:
-                print(f"📝 Added transcript: {speaker}: {text[:50]}...")
                 return result.data[0]
             else:
-                print(f"❌ No data returned from transcript creation")
                 return None
             
         except Exception as e:
             print(f"❌ Failed to add transcript: {e}")
-            print(f"🔍 Exception type: {type(e)}")
-            import traceback
-            print(f"🔍 Full traceback: {traceback.format_exc()}")
             return None
     
     async def get_conversation_transcripts(self, session_id: str, limit: int = 100):
@@ -358,7 +357,6 @@ Remember: This is a real-time voice conversation with full transcription enabled
                 except asyncio.CancelledError:
                     pass
             del self.audio_streaming_tasks[session_id]
-            print(f"✅ Stopped audio streaming task for {session_id}")
         
         # Cleanup audio queue
         if session_id in self.audio_out_queues:
@@ -366,7 +364,6 @@ Remember: This is a real-time voice conversation with full transcription enabled
             # Send shutdown signal
             await queue.put(None)
             del self.audio_out_queues[session_id]
-            print(f"✅ Cleaned up audio queue for {session_id}")
         
         # Close Gemini session properly
         if session_id in self.gemini_sessions:
@@ -386,6 +383,23 @@ Remember: This is a real-time voice conversation with full transcription enabled
             del self.active_sessions[session_id]
             print(f"✅ Removed session {session_id} from active sessions")
         
+        # Clean up transcript buffers and timers
+        if session_id in self.transcript_buffers:
+            # Cancel any pending timers
+            if session_id in self.transcript_timers:
+                for speaker_timers in self.transcript_timers[session_id].values():
+                    if speaker_timers.get('timer'):
+                        speaker_timers['timer'].cancel()
+                del self.transcript_timers[session_id]
+            
+            # Save any remaining buffered text
+            for speaker, buffered_text in self.transcript_buffers[session_id].items():
+                if buffered_text.strip():
+                    await self.add_transcript(session_id, speaker, buffered_text.strip(), "session_cleanup")
+                    print(f"📝 {speaker.title()}: {buffered_text.strip()}")
+            
+            del self.transcript_buffers[session_id]
+        
         # Remove WebSocket connection
         if session_id in self.websocket_connections:
             del self.websocket_connections[session_id]
@@ -393,7 +407,6 @@ Remember: This is a real-time voice conversation with full transcription enabled
     async def start_audio_streaming(self, session_id: str, websocket: WebSocket):
         """Start background audio streaming for a session"""
         if session_id not in self.gemini_sessions:
-            print(f"❌ No Gemini session found for {session_id}")
             return
             
         # Create audio queue for this session
@@ -406,12 +419,9 @@ Remember: This is a real-time voice conversation with full transcription enabled
         # Store tasks for cleanup
         self.audio_streaming_tasks[session_id] = receive_task
         
-        print(f"🎵 Started audio streaming for session {session_id}")
-        
     async def receive_audio_from_gemini(self, session_id: str):
         """Continuously receive audio and transcripts from Gemini Live API"""
         if session_id not in self.gemini_sessions:
-            print(f"❌ No Gemini session found for {session_id}")
             return
             
         session_info = self.gemini_sessions[session_id]
@@ -421,16 +431,11 @@ Remember: This is a real-time voice conversation with full transcription enabled
         session_state = self.active_sessions.get(session_id, {})
         user_id = session_state.get('user_id')
         
-        print(f"🎧 Starting to listen for audio responses from Gemini for session {session_id}")
-        
         try:
             while session_id in self.gemini_sessions:
                 turn = session.receive()
                 
                 async for response in turn:
-                    # Debug: Print response type
-                    print(f"🔍 Response type: {type(response)}")
-                    
                     # Handle audio data
                     if response.data:
                         # Queue audio data for WebSocket sending
@@ -448,54 +453,30 @@ Remember: This is a real-time voice conversation with full transcription enabled
                         if hasattr(server_content, 'output_transcription') and server_content.output_transcription:
                             if hasattr(server_content.output_transcription, 'text') and server_content.output_transcription.text:
                                 ai_transcript = server_content.output_transcription.text
-                                print(f"📝 AI Output Transcript: {ai_transcript}")
-                                await self.add_transcript(session_id, "assistant", ai_transcript, "gemini_live_output_transcription", user_id=user_id)
+                                await self.add_buffered_transcript(session_id, "assistant", ai_transcript, "gemini_live_output_transcription", user_id=user_id)
                                 transcript_found = True
                         
                         # Handle user input transcription (user speech-to-text)
                         if hasattr(server_content, 'input_transcription') and server_content.input_transcription:
                             if hasattr(server_content.input_transcription, 'text') and server_content.input_transcription.text:
                                 user_transcript = server_content.input_transcription.text
-                                print(f"🎤 User Input Transcript: {user_transcript}")
-                                await self.add_transcript(session_id, "user", user_transcript, "gemini_live_input_transcription", user_id=user_id)
+                                await self.add_buffered_transcript(session_id, "user", user_transcript, "gemini_live_input_transcription", user_id=user_id)
                                 transcript_found = True
                         
                         # Handle model turn content (for text responses)
                         if hasattr(server_content, 'model_turn') and server_content.model_turn:
                             model_turn = server_content.model_turn
-                            print(f"🔍 Model turn detected: {type(model_turn)}")
                             
                             # Check if model_turn has parts with text
                             if hasattr(model_turn, 'parts') and model_turn.parts:
                                 for part in model_turn.parts:
                                     if hasattr(part, 'text') and part.text:
-                                        print(f"📝 Model Turn Text: {part.text}")
-                                        await self.add_transcript(session_id, "assistant", part.text, "gemini_live_model_turn", user_id=user_id)
+                                        await self.add_buffered_transcript(session_id, "assistant", part.text, "gemini_live_model_turn", user_id=user_id)
                                         transcript_found = True
                     
                     # Fallback: Check direct response.text (legacy support)
                     if not transcript_found and response.text:
-                        print(f"📝 Direct Response Text: {response.text}")
-                        await self.add_transcript(session_id, "assistant", response.text, "gemini_live_direct_text", user_id=user_id)
-                    
-                    # Debug: If we receive audio but no transcript, log for investigation
-                    if not transcript_found and response.data:
-                        print(f"⚠️ Audio response received but no transcript found")
-                        print(f"🔍 Server content exists: {hasattr(response, 'server_content') and response.server_content is not None}")
-                        
-                        if hasattr(response, 'server_content') and response.server_content:
-                            sc = response.server_content
-                            print(f"🔍 Has output_transcription: {hasattr(sc, 'output_transcription')}")
-                            print(f"🔍 Has input_transcription: {hasattr(sc, 'input_transcription')}")
-                            print(f"🔍 Has model_turn: {hasattr(sc, 'model_turn')}")
-                            
-                            if hasattr(sc, 'output_transcription') and sc.output_transcription:
-                                print(f"🔍 Output transcription type: {type(sc.output_transcription)}")
-                                print(f"🔍 Output transcription has text: {hasattr(sc.output_transcription, 'text')}")
-                            
-                            if hasattr(sc, 'input_transcription') and sc.input_transcription:
-                                print(f"🔍 Input transcription type: {type(sc.input_transcription)}")
-                                print(f"🔍 Input transcription has text: {hasattr(sc.input_transcription, 'text')}")
+                        await self.add_buffered_transcript(session_id, "assistant", response.text, "gemini_live_direct_text", user_id=user_id)
                     
         except Exception as e:
             print(f"❌ Error receiving audio for session {session_id}: {e}")
@@ -504,12 +485,9 @@ Remember: This is a real-time voice conversation with full transcription enabled
     async def send_audio_to_websocket(self, session_id: str, websocket: WebSocket):
         """Send audio from queue to WebSocket client"""
         if session_id not in self.audio_out_queues:
-            print(f"❌ No audio queue for session {session_id}")
             return
             
         audio_queue = self.audio_out_queues[session_id]
-        
-        print(f"📤 Starting audio sender for session {session_id}")
         
         try:
             while True:
@@ -532,8 +510,6 @@ Remember: This is a real-time voice conversation with full transcription enabled
                     }
                 })
                 
-                print(f"📤 Sent {len(audio_data)} bytes of audio to WebSocket")
-                
                 # Mark task as done
                 audio_queue.task_done()
                 
@@ -545,15 +521,10 @@ Remember: This is a real-time voice conversation with full transcription enabled
         async def send_if_open(data: Dict):
             """Helper function to send data only if WebSocket is still open"""
             try:
-                print(f"📤 Attempting to send WebSocket message: {data.get('type', 'unknown')}")
                 await websocket.send_json(data)
-                print(f"✅ WebSocket message sent successfully: {data.get('type', 'unknown')}")
-                    
             except Exception as e:
-                print(f"⚠️ WebSocket send failed (connection likely closed): {data.get('type', 'unknown')}")
-                print(f"🔍 Error details: {e}")
-                print(f"🔍 Error type: {type(e)}")
-                # Silently ignore the error - this is expected when connection is closed
+                # Silently ignore WebSocket send errors - this is expected when connection is closed
+                pass
         
         try:
             message_type = message.get('type')
@@ -614,9 +585,8 @@ Remember: This is a real-time voice conversation with full transcription enabled
                 # Start audio streaming for this session
                 await self.start_audio_streaming(session_id, websocket)
                 
-                # Send initial message to start the conversation
-                initial_message = "Hello! I'm ready to start the interview. Please introduce yourself briefly, and then I'll ask you some questions. What's your name and background?"
-                await gemini_session.send_realtime_input(text=initial_message)
+                # Don't send initial message automatically - wait for user to start
+                # User should click "Start Interview" button to begin the conversation
                 
                 await send_if_open({
                     'type': 'session_created',
@@ -647,6 +617,40 @@ Remember: This is a real-time voice conversation with full transcription enabled
                             'type': 'error',
                             'data': {'message': 'Failed to process audio'}
                         })
+            
+            elif message_type == 'start_interview':
+                # User clicked "Start Interview" - now send the initial message to Gemini
+                if session_id in self.gemini_sessions:
+                    try:
+                        session_info = self.gemini_sessions[session_id]
+                        session = session_info['session']
+                        
+                        # Get the interview mode to customize the initial message
+                        session_state = self.active_sessions.get(session_id, {})
+                        mode = session_state.get('mode', 'amazon_interviewer')
+                        
+                        # Send initial message to start the conversation
+                        initial_message = "Hello! I'm ready to start the interview. Please introduce yourself briefly, and then I'll ask you some questions. What's your name and background?"
+                        await session.send_realtime_input(text=initial_message)
+                        
+                        print(f"🎙️ Interview started for session {session_id} with mode {mode}")
+                        
+                        await send_if_open({
+                            'type': 'interview_started',
+                            'data': {'message': 'Interview has begun'}
+                        })
+                        
+                    except Exception as e:
+                        print(f"❌ Error starting interview: {e}")
+                        await send_if_open({
+                            'type': 'error',
+                            'data': {'message': 'Failed to start interview'}
+                        })
+                else:
+                    await send_if_open({
+                        'type': 'error',
+                        'data': {'message': 'No active session found'}
+                    })
             
             elif message_type == 'text_input':
                 text = data.get('text')
@@ -701,6 +705,73 @@ Remember: This is a real-time voice conversation with full transcription enabled
                     'type': 'error',
                     'data': {'message': str(e)}
                 })
+
+    async def add_buffered_transcript(self, session_id: str, speaker: str, text: str, provider: str = None, user_id: str = None):
+        """Add transcript with buffering to accumulate partial responses into complete sentences"""
+        if not text or not text.strip():
+            return
+            
+        # Clean the text
+        new_text = text.strip()
+        
+        # Ignore very short fragments (likely incomplete)
+        if len(new_text) <= 2 and not any(end in new_text for end in ['.', '!', '?']):
+            return
+            
+        # Initialize buffers if needed
+        if session_id not in self.transcript_buffers:
+            self.transcript_buffers[session_id] = {}
+            self.transcript_timers[session_id] = {}
+        
+        if speaker not in self.transcript_buffers[session_id]:
+            self.transcript_buffers[session_id][speaker] = ""
+            self.transcript_timers[session_id][speaker] = {'last_update': datetime.now(), 'timer': None}
+        
+        # For Gemini Live API, each response contains the current full transcript
+        # So we just replace the buffer with the latest text
+        self.transcript_buffers[session_id][speaker] = new_text
+        
+        # Update timing
+        self.transcript_timers[session_id][speaker]['last_update'] = datetime.now()
+        
+        # Cancel existing timer
+        if self.transcript_timers[session_id][speaker]['timer']:
+            self.transcript_timers[session_id][speaker]['timer'].cancel()
+        
+        # Check if we should save immediately (complete sentence indicators)
+        should_save_now = (
+            new_text.endswith('.') or 
+            new_text.endswith('!') or 
+            new_text.endswith('?') or
+            new_text.endswith('\n') or
+            len(new_text) > 150 or  # Save very long fragments
+            any(end in new_text for end in ['. ', '! ', '? '])  # Sentence endings in middle
+        )
+        
+        if should_save_now:
+            # Save immediately
+            final_text = self.transcript_buffers[session_id][speaker].strip()
+            if final_text and len(final_text) > 2:  # Only save meaningful text
+                await self.add_transcript(session_id, speaker, final_text, provider, user_id=user_id)
+                print(f"📝 {speaker.title()}: {final_text}")
+            self.transcript_buffers[session_id][speaker] = ""
+            self.transcript_timers[session_id][speaker]['timer'] = None
+        else:
+            # Set a timer to save after 3 seconds of no updates (longer timeout)
+            async def save_buffered():
+                await asyncio.sleep(3)
+                if session_id in self.transcript_buffers and speaker in self.transcript_buffers[session_id]:
+                    buffered_text = self.transcript_buffers[session_id][speaker].strip()
+                    if buffered_text and len(buffered_text) > 2:  # Only save meaningful text
+                        await self.add_transcript(session_id, speaker, buffered_text, provider, user_id=user_id)
+                        print(f"📝 {speaker.title()}: {buffered_text}")
+                    self.transcript_buffers[session_id][speaker] = ""
+                    if session_id in self.transcript_timers and speaker in self.transcript_timers[session_id]:
+                        self.transcript_timers[session_id][speaker]['timer'] = None
+            
+            # Start the timer task
+            timer_task = asyncio.create_task(save_buffered())
+            self.transcript_timers[session_id][speaker]['timer'] = timer_task
 
 # Global backend instance (will be initialized in lifespan)
 backend = None
