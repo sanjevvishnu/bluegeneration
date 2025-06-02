@@ -39,9 +39,9 @@ invalid input syntax for type uuid: "user_2xs8u5AbDGNJTpW2UwwL2vooTrD"
   ```env
   NEXT_PUBLIC_API_URL=http://localhost:3000
   NEXT_PUBLIC_WS_URL=ws://localhost:3000
-  NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_Z2l2aW5nLWNvbmRvci0yNC5jbGVyay5hY2NvdW50cy5kZXYk
-  CLERK_SECRET_KEY=sk_test_J3659xks0Ptcd4rraJWnygVzs14oEOjrfPiNJ47UGc
-  GEMINI_API_KEY=AIzaSyA6KB7XePVvogz1rr4AncxeKLgYobUd4mE
+  NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=[REDACTED - Use your own Clerk publishable key]
+  CLERK_SECRET_KEY=[REDACTED - Use your own Clerk secret key]
+  GEMINI_API_KEY=[REDACTED - Use your own Gemini API key]
   ```
 
 ### 4. **Enhanced Error Logging**
@@ -90,6 +90,7 @@ if final_user_id:
 
 **Created environment file**: `frontend/.env.local`
 - Added all required environment variables for API and WebSocket connections
+- **IMPORTANT**: This file is not included in the repository and contains sensitive keys
 
 **Enhanced WebSocket debugging**: `frontend/src/hooks/useInterviewSession.ts`
 - Improved error logging and URL construction
@@ -123,10 +124,17 @@ if final_user_id:
 2. **Monitor Logs**: Check backend logs during interview sessions to ensure smooth operation
 3. **Clean Up**: Remove temporary debug components and test files
 
+## Security Notice
+
+**IMPORTANT**: This file has been cleaned of sensitive API keys. Make sure to:
+- Never commit API keys or secrets to version control
+- Use environment variables for sensitive configuration
+- Add `.env.local` and similar files to `.gitignore`
+
 ## Files Modified
 
 - `backend/simple_supabase_backend.py` - Fixed user ID conversion in add_transcript
-- `frontend/.env.local` - Added required environment variables (created)
+- `frontend/.env.local` - Added required environment variables (NOT committed to repo)
 - `frontend/src/hooks/useInterviewSession.ts` - Enhanced error logging and URL construction
 - `frontend/src/app/dashboard/page.tsx` - Removed temporary debug component
 
