@@ -25,11 +25,19 @@ import {
   Bell,
   Search,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  RefreshCw,
+  Copy,
+  Download,
+  AlertCircle,
+  Bot
 } from "lucide-react"
 import Link from "next/link"
 import { UserButton, useUser } from "@clerk/nextjs"
 import { useEffect, useState } from "react"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 
 // Types for API responses
 interface UserStats {
@@ -54,6 +62,15 @@ interface RecentInterview {
   completed_at: string | null
 }
 
+interface TranscriptEntry {
+  id: string
+  speaker: 'user' | 'assistant'
+  text: string
+  created_at: string
+  provider?: string
+  confidence_score?: number
+}
+
 export default function Dashboard() {
   const { user, isLoaded } = useUser()
   const [isUserSynced, setIsUserSynced] = useState(false)
@@ -62,6 +79,15 @@ export default function Dashboard() {
   const [isLoadingStats, setIsLoadingStats] = useState(true)
   const [isLoadingInterviews, setIsLoadingInterviews] = useState(true)
   const [showRecentInterviews, setShowRecentInterviews] = useState(false)
+  const [activeTab, setActiveTab] = useState('dashboard')
+  
+  // Transcript state
+  const [sessionId, setSessionId] = useState('')
+  const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([])
+  const [transcriptLoading, setTranscriptLoading] = useState(false)
+  const [transcriptError, setTranscriptError] = useState<string | null>(null)
+  const [recentSessions, setRecentSessions] = useState<RecentInterview[]>([])
+  const [loadingRecentSessions, setLoadingRecentSessions] = useState(false)
 
   // Auto-sync user to Supabase on first visit
   useEffect(() => {
@@ -207,6 +233,109 @@ export default function Dashboard() {
     return `${minutes}:${seconds.toString().padStart(2, '0')}`
   }
 
+  const fetchTranscripts = async () => {
+    if (!sessionId.trim()) {
+      setTranscriptError('Please enter a session ID')
+      return
+    }
+
+    setTranscriptLoading(true)
+    setTranscriptError(null)
+
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/transcripts/${sessionId}?format=conversation`)
+      
+      if (!response.ok) {
+        if (response.status === 404) {
+          setTranscriptError('Session not found. Please check the session ID.')
+        } else {
+          setTranscriptError('Failed to fetch transcripts')
+        }
+        setTranscripts([])
+        return
+      }
+
+      const data = await response.json()
+      // Handle the API response format: {format: "conversation", content: [...]}
+      const transcriptArray = data.content || data
+      setTranscripts(transcriptArray)
+    } catch (error) {
+      setTranscriptError('Error fetching transcripts')
+      setTranscripts([])
+    } finally {
+      setTranscriptLoading(false)
+    }
+  }
+
+  const copyTranscript = () => {
+    const transcriptText = transcripts
+      .map(entry => `${entry.speaker.toUpperCase()}: ${entry.text}`)
+      .join('\n')
+    
+    navigator.clipboard.writeText(transcriptText)
+  }
+
+  const downloadTranscript = () => {
+    const transcriptText = transcripts
+      .map(entry => `${entry.speaker.toUpperCase()}: ${entry.text}`)
+      .join('\n')
+    
+    const blob = new Blob([transcriptText], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `transcript-${sessionId}.txt`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
+  const formatTime = (dateString: string) => {
+    return new Date(dateString).toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    })
+  }
+
+  const fetchRecentSessions = async () => {
+    if (!isLoaded || !user) return
+
+    setLoadingRecentSessions(true)
+    try {
+      console.log('📋 Fetching recent sessions for transcripts for:', user.id)
+      
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/user/conversations?limit=10`, {
+        headers: {
+          'Authorization': `Bearer ${user.id}`,
+          'Content-Type': 'application/json',
+        },
+      })
+
+      if (response.ok) {
+        const sessions = await response.json()
+        console.log('✅ Recent sessions fetched:', sessions)
+        setRecentSessions(sessions)
+      } else {
+        console.error('❌ Failed to fetch recent sessions:', response.status)
+        setRecentSessions([])
+      }
+    } catch (error) {
+      console.error('❌ Error fetching recent sessions:', error)
+      setRecentSessions([])
+    } finally {
+      setLoadingRecentSessions(false)
+    }
+  }
+
+  // Fetch recent sessions when switching to transcripts tab
+  useEffect(() => {
+    if (activeTab === 'transcripts') {
+      fetchRecentSessions()
+    }
+  }, [activeTab, isLoaded, user])
+
   const interviewTypes = [
     {
       id: "amazon_interviewer",
@@ -243,9 +372,9 @@ export default function Dashboard() {
   ]
 
   const sidebarItems = [
-    { name: 'Dashboard', icon: Home, href: '/dashboard', active: true },
+    { name: 'Dashboard', icon: Home, tab: 'dashboard' },
     { name: 'Interviews', icon: Mic, href: '/interview' },
-    { name: 'Transcripts', icon: FileText, href: '/transcripts' },
+    { name: 'Transcripts', icon: FileText, tab: 'transcripts' },
     { name: 'Analytics', icon: BarChart3, href: '/analytics' },
     { name: 'Resources', icon: BookOpen, href: '/resources' },
     { name: 'Help', icon: HelpCircle, href: '/help' },
@@ -270,16 +399,26 @@ export default function Dashboard() {
           <ul className="space-y-1">
             {sidebarItems.map((item) => (
               <li key={item.name}>
-                <Link href={item.href}>
-                  <div className={`flex items-center space-x-3 px-3 py-2 rounded-lg transition-colors ${
-                    item.active 
-                      ? 'bg-accent text-accent-foreground' 
-                      : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
-                  }`}>
+                {item.href ? (
+                  <Link href={item.href}>
+                    <div className="flex items-center space-x-3 px-3 py-2 rounded-lg transition-colors text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground">
+                      <item.icon className="w-4 h-4" />
+                      <span className="font-medium text-sm">{item.name}</span>
+                    </div>
+                  </Link>
+                ) : (
+                  <button
+                    onClick={() => setActiveTab(item.tab!)}
+                    className={`flex items-center space-x-3 px-3 py-2 rounded-lg transition-colors w-full text-left ${
+                      activeTab === item.tab
+                        ? 'bg-accent text-accent-foreground' 
+                        : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+                    }`}
+                  >
                     <item.icon className="w-4 h-4" />
                     <span className="font-medium text-sm">{item.name}</span>
-                  </div>
-                </Link>
+                  </button>
+                )}
               </li>
             ))}
           </ul>
@@ -342,7 +481,9 @@ export default function Dashboard() {
 
         {/* Content Area */}
         <div className="flex-1 overflow-auto p-4">
-          {/* Stats Cards */}
+          {activeTab === 'dashboard' && (
+            <div>
+              {/* Stats Cards */}
           <div className="grid grid-cols-4 gap-4 mb-4">
             <Card className="border-border bg-background">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -623,6 +764,216 @@ export default function Dashboard() {
               </Card>
             </div>
           </div>
+            </div>
+          )}
+
+          {activeTab === 'transcripts' && (
+            <div>
+              {/* Header */}
+              <div className="mb-8">
+                <h2 className="text-3xl font-bold text-gray-800 mb-2">Interview Transcripts</h2>
+                <p className="text-gray-600">View conversation transcripts from your interview sessions</p>
+              </div>
+
+              {/* Recent Sessions */}
+              <Card className="mb-6">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle>Your Recent Sessions</CardTitle>
+                      <CardDescription>Click on any session to load its transcript</CardDescription>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={fetchRecentSessions} disabled={loadingRecentSessions}>
+                      {loadingRecentSessions ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                          Loading...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="w-4 h-4 mr-2" />
+                          Refresh
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {loadingRecentSessions ? (
+                    <div className="space-y-2">
+                      {[1, 2, 3].map((i) => (
+                        <div key={i} className="flex items-center justify-between p-3 border border-border rounded-lg bg-background animate-pulse">
+                          <div className="flex-1">
+                            <div className="h-4 bg-muted rounded w-48 mb-2"></div>
+                            <div className="h-3 bg-muted rounded w-32"></div>
+                          </div>
+                          <div className="h-8 bg-muted rounded w-20"></div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : recentSessions.length > 0 ? (
+                    <div className="space-y-2 max-h-64 overflow-y-auto">
+                      {recentSessions.map((session) => (
+                        <div
+                          key={session.id}
+                          className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-secondary transition-colors cursor-pointer"
+                          onClick={() => {
+                            setSessionId(session.session_id)
+                            fetchTranscripts()
+                          }}
+                        >
+                          <div className="flex-1">
+                            <div className="flex items-center gap-3 mb-1">
+                              <h4 className="font-medium text-foreground text-sm">
+                                {session.title || `${session.mode.replace('_', ' ')} Interview`}
+                              </h4>
+                              <Badge variant={session.status === 'completed' ? 'default' : session.status === 'active' ? 'secondary' : 'outline'} className="text-xs">
+                                {session.status}
+                              </Badge>
+                            </div>
+                            <div className="flex items-center space-x-4 text-xs text-muted-foreground">
+                              <span>📋 {session.session_id}</span>
+                              <span>📅 {formatDate(session.created_at)}</span>
+                              {session.duration && <span>⏱️ {formatDuration(session.duration)}</span>}
+                              {session.performance_score && (
+                                <span>🎯 {session.performance_score.toFixed(1)}/10</span>
+                              )}
+                            </div>
+                          </div>
+                          <Button size="sm" variant="ghost">
+                            View Transcript
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-8">
+                      <MessageCircle className="w-12 h-12 text-muted-foreground mx-auto mb-4 opacity-50" />
+                      <p className="text-muted-foreground font-medium">No interview sessions found</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Start an interview to see your sessions here
+                      </p>
+                      <Link href="/interview">
+                        <Button className="mt-4" size="sm">
+                          <Mic className="w-4 h-4 mr-2" />
+                          Start Interview
+                        </Button>
+                      </Link>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="mb-6">
+                <CardHeader>
+                  <CardTitle>Load Specific Transcript</CardTitle>
+                  <CardDescription>Enter a session ID manually to view any conversation transcript</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex gap-4">
+                    <div className="flex-1">
+                      <Label htmlFor="sessionId">Session ID</Label>
+                      <Input
+                        id="sessionId"
+                        placeholder="Enter session ID (e.g., session_123abc)"
+                        value={sessionId}
+                        onChange={(e) => setSessionId(e.target.value)}
+                        className="mt-1"
+                      />
+                    </div>
+                    <div className="flex items-end gap-2">
+                      <Button onClick={fetchTranscripts} disabled={transcriptLoading || !sessionId.trim()}>
+                        {transcriptLoading ? (
+                          <>
+                            <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                            Loading...
+                          </>
+                        ) : (
+                          'Load Transcript'
+                        )}
+                      </Button>
+                      {sessionId && (
+                        <Button variant="outline" onClick={() => setSessionId('')}>
+                          Clear
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {transcriptError && (
+                <Alert className="mb-6" variant="destructive">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription>{transcriptError}</AlertDescription>
+                </Alert>
+              )}
+
+              {transcripts.length > 0 && (
+                <Card>
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <CardTitle>Conversation Transcript</CardTitle>
+                        <CardDescription>Session ID: {sessionId}</CardDescription>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button variant="outline" size="sm" onClick={copyTranscript}>
+                          <Copy className="w-4 h-4 mr-2" />
+                          Copy
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={downloadTranscript}>
+                          <Download className="w-4 h-4 mr-2" />
+                          Download
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={fetchTranscripts}>
+                          <RefreshCw className="w-4 h-4 mr-2" />
+                          Refresh
+                        </Button>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4 max-h-96 overflow-y-auto">
+                      {transcripts.map((entry, index) => (
+                        <div
+                          key={`${entry.timestamp}-${index}`}
+                          className={`flex gap-3 p-3 rounded-lg ${
+                            entry.speaker === 'user' 
+                              ? 'bg-blue-50 border-l-4 border-blue-400' 
+                              : 'bg-gray-50 border-l-4 border-gray-400'
+                          }`}
+                        >
+                          <div className="flex-shrink-0">
+                            {entry.speaker === 'user' ? (
+                              <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center">
+                                <Mic className="w-4 h-4 text-white" />
+                              </div>
+                            ) : (
+                              <div className="w-8 h-8 bg-gray-500 rounded-full flex items-center justify-center">
+                                <Bot className="w-4 h-4 text-white" />
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="font-medium capitalize">
+                                {entry.speaker === 'user' ? 'You' : 'Assistant'}
+                              </span>
+                              <span className="text-xs text-gray-500">
+                                {formatTime(entry.created_at)}
+                              </span>
+                            </div>
+                            <p className="text-gray-700">{entry.text}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

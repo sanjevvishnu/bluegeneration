@@ -1,5 +1,39 @@
 # 🚀 Simple Supabase Backend - Coimbatore
 
+## 🐍 **Python Setup (Required)**
+
+### **1. Create Virtual Environment**
+```bash
+# Navigate to backend directory
+cd backend
+
+# Create virtual environment
+python -m venv venv
+
+# Activate virtual environment
+# On macOS/Linux:
+source venv/bin/activate
+# On Windows:
+# venv\Scripts\activate
+
+# Verify activation (should show venv path)
+which python
+```
+
+### **2. Install Dependencies**
+```bash
+# With virtual environment activated
+pip install -r requirements.txt
+```
+
+### **3. Run Backend**
+```bash
+# Make sure virtual environment is activated
+python simple_supabase_backend.py
+```
+
+**⚠️ Important**: Always activate the virtual environment before running the backend or installing packages.
+
 ## ✨ **Simplified Architecture**
 
 **Two-Table Design with Supabase** - Clean and minimal!

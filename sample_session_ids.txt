@@ -1,0 +1,25 @@
+# Sample Session IDs for Testing
+# Format: session_[random_string]
+
+session_demo_001
+session_test_123
+session_sample_456
+session_interview_789
+session_technical_abc
+session_behavioral_def
+session_coding_ghi
+session_system_jkl
+session_practice_mno
+session_mock_pqr
+
+# How to test:
+# 1. Go to: http://localhost:3001/dashboard
+# 2. Click "Transcripts" tab
+# 3. Enter any session ID above
+# 4. Click "Load Transcript"
+# 5. Should show: "Session not found" (proving API works)
+
+# To create real data:
+# 1. Start interview at: http://localhost:3001/interview
+# 2. WebSocket will create real session with transcripts
+# 3. Check browser dev tools for actual session ID

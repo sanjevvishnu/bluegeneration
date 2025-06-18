@@ -34,8 +34,9 @@ import aiohttp
 import websockets
 from google.genai.types import LiveConnectConfig, Blob
 
-# Load environment variables
-load_dotenv()
+# Load environment variables (check parent directory first, then local)
+load_dotenv(dotenv_path="../.env")  # Parent directory
+load_dotenv()  # Local backend/.env (if exists, overrides parent)
 
 # Gemini imports
 try:
@@ -714,7 +715,7 @@ Remember: This is a real-time voice conversation with full transcription enabled
         # Clean the text
         new_text = text.strip()
         
-        # Ignore very short fragments (likely incomplete)
+        # Ignore very short fragments (likely incomplete) unless they contain sentence endings
         if len(new_text) <= 2 and not any(end in new_text for end in ['.', '!', '?']):
             return
             
@@ -727,9 +728,11 @@ Remember: This is a real-time voice conversation with full transcription enabled
             self.transcript_buffers[session_id][speaker] = ""
             self.transcript_timers[session_id][speaker] = {'last_update': datetime.now(), 'timer': None}
         
-        # For Gemini Live API, each response contains the current full transcript
-        # So we just replace the buffer with the latest text
-        self.transcript_buffers[session_id][speaker] = new_text
+        # APPEND to buffer instead of replacing (Gemini sends incremental 3-char chunks)
+        current_buffer = self.transcript_buffers[session_id][speaker]
+        
+        # Smart concatenation - no space needed since Gemini includes them
+        self.transcript_buffers[session_id][speaker] = current_buffer + new_text
         
         # Update timing
         self.transcript_timers[session_id][speaker]['last_update'] = datetime.now()
@@ -738,31 +741,34 @@ Remember: This is a real-time voice conversation with full transcription enabled
         if self.transcript_timers[session_id][speaker]['timer']:
             self.transcript_timers[session_id][speaker]['timer'].cancel()
         
+        # Get the accumulated text
+        accumulated_text = self.transcript_buffers[session_id][speaker].strip()
+        
         # Check if we should save immediately (complete sentence indicators)
         should_save_now = (
-            new_text.endswith('.') or 
-            new_text.endswith('!') or 
-            new_text.endswith('?') or
-            new_text.endswith('\n') or
-            len(new_text) > 150 or  # Save very long fragments
-            any(end in new_text for end in ['. ', '! ', '? '])  # Sentence endings in middle
+            accumulated_text.endswith('.') or 
+            accumulated_text.endswith('!') or 
+            accumulated_text.endswith('?') or
+            len(accumulated_text) > 300 or  # Save very long responses
+            # Look for complete sentence patterns (sentence + space)
+            '. ' in accumulated_text or '! ' in accumulated_text or '? ' in accumulated_text
         )
         
         if should_save_now:
-            # Save immediately
-            final_text = self.transcript_buffers[session_id][speaker].strip()
-            if final_text and len(final_text) > 2:  # Only save meaningful text
-                await self.add_transcript(session_id, speaker, final_text, provider, user_id=user_id)
-                print(f"📝 {speaker.title()}: {final_text}")
+            # Save immediately if we have a complete sentence
+            if accumulated_text and len(accumulated_text) > 8:  # Require meaningful length
+                await self.add_transcript(session_id, speaker, accumulated_text, provider, user_id=user_id)
+                print(f"📝 {speaker.title()}: {accumulated_text}")
+            # Clear the buffer
             self.transcript_buffers[session_id][speaker] = ""
             self.transcript_timers[session_id][speaker]['timer'] = None
         else:
-            # Set a timer to save after 3 seconds of no updates (longer timeout)
+            # Set a timer to save after 6 seconds of no updates (longer for complete sentences)
             async def save_buffered():
-                await asyncio.sleep(3)
+                await asyncio.sleep(6)
                 if session_id in self.transcript_buffers and speaker in self.transcript_buffers[session_id]:
                     buffered_text = self.transcript_buffers[session_id][speaker].strip()
-                    if buffered_text and len(buffered_text) > 2:  # Only save meaningful text
+                    if buffered_text and len(buffered_text) > 8:  # Require meaningful length
                         await self.add_transcript(session_id, speaker, buffered_text, provider, user_id=user_id)
                         print(f"📝 {speaker.title()}: {buffered_text}")
                     self.transcript_buffers[session_id][speaker] = ""
@@ -902,7 +908,8 @@ async def get_transcripts(session_id: str, format: str = "json", speaker: str = 
         transcripts = await backend.get_conversation_transcripts(session_id)
         
         if not transcripts:
-            raise HTTPException(status_code=404, detail="No transcripts found for this session")
+            # Return empty array instead of 404 for sessions with no transcripts
+            return {"format": format, "content": []}
         
         # Filter by speaker if specified
         if speaker:
@@ -980,6 +987,155 @@ async def delete_conversation(session_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/test/create-sample-data")
+async def create_sample_data():
+    """Create sample conversation and transcript data for testing"""
+    if not backend:
+        raise HTTPException(status_code=503, detail="Backend is still initializing")
+    if not backend.supabase:
+        raise HTTPException(status_code=500, detail="Supabase not configured")
+    
+    try:
+        import uuid
+        
+        # Create test session ID
+        test_session_id = f"session_demo_{uuid.uuid4().hex[:6]}"
+        
+        # Create test conversation
+        conversation_data = {
+            "session_id": test_session_id,
+            "mode": "technical_screening",
+            "status": "completed", 
+            "title": "Demo Technical Interview",
+            "duration": 420,
+            "performance_score": 8.5,
+            "difficulty_level": "medium"
+        }
+        
+        # Insert conversation
+        conv_result = backend.supabase.table("conversations").insert(conversation_data).execute()
+        
+        if conv_result.data:
+            # Create test transcripts
+            test_transcripts = [
+                {
+                    "session_id": test_session_id,
+                    "speaker": "assistant",
+                    "text": "Hello! Welcome to your technical interview. I'm excited to work with you today. Let's start with some basics - can you tell me about your experience with Python?",
+                    "provider": "gemini_text",
+                    "confidence_score": 0.95
+                },
+                {
+                    "session_id": test_session_id,
+                    "speaker": "user", 
+                    "text": "I have about 3 years of experience with Python. I've worked on web development using Django and Flask, data analysis with pandas, and some machine learning projects with scikit-learn.",
+                    "provider": "user_input",
+                    "confidence_score": 1.0
+                },
+                {
+                    "session_id": test_session_id,
+                    "speaker": "assistant",
+                    "text": "That's great! Python is such a versatile language. Now, let's dive into a coding question. Can you write a function that finds the two numbers in an array that add up to a target sum?",
+                    "provider": "gemini_text",
+                    "confidence_score": 0.98
+                },
+                {
+                    "session_id": test_session_id,
+                    "speaker": "user",
+                    "text": "Sure! I'll use a hash map approach for O(n) time complexity. Let me walk through the solution step by step.",
+                    "provider": "user_input",
+                    "confidence_score": 1.0
+                },
+                {
+                    "session_id": test_session_id,
+                    "speaker": "assistant", 
+                    "text": "Perfect approach! The hash map solution is indeed optimal. Can you also explain the space complexity and any edge cases we should consider?",
+                    "provider": "gemini_text",
+                    "confidence_score": 0.96
+                },
+                {
+                    "session_id": test_session_id,
+                    "speaker": "user",
+                    "text": "The space complexity is O(n) for the hash map. Edge cases include: empty array, array with less than 2 elements, no valid pair exists, and duplicate numbers.",
+                    "provider": "user_input", 
+                    "confidence_score": 1.0
+                }
+            ]
+            
+            # Insert transcripts
+            for transcript in test_transcripts:
+                backend.supabase.table("transcripts").insert(transcript).execute()
+            
+            return {
+                "message": "Sample data created successfully",
+                "session_id": test_session_id,
+                "conversation_count": 1,
+                "transcript_count": len(test_transcripts),
+                "test_url": f"http://localhost:3001/dashboard"
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to create conversation")
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creating sample data: {str(e)}")
+
+@app.get("/api/test/list-sessions")
+async def list_sessions():
+    """List all available session IDs for testing"""
+    if not backend:
+        raise HTTPException(status_code=503, detail="Backend is still initializing")
+    if not backend.supabase:
+        raise HTTPException(status_code=500, detail="Supabase not configured")
+    
+    try:
+        # Get active sessions
+        active_sessions = list(backend.active_sessions.keys()) if hasattr(backend, 'active_sessions') else []
+        
+        # Get sessions from database
+        db_sessions = []
+        try:
+            result = backend.supabase.table("conversations").select("session_id, mode, status, created_at").limit(20).execute()
+            if result.data:
+                db_sessions = [
+                    {
+                        "session_id": row["session_id"],
+                        "mode": row["mode"],
+                        "status": row["status"],
+                        "created_at": row["created_at"]
+                    }
+                    for row in result.data
+                ]
+        except Exception as db_error:
+            print(f"Database query error: {db_error}")
+        
+        # Get sessions that have transcripts
+        transcript_sessions = []
+        try:
+            transcript_result = backend.supabase.table("transcripts").select("session_id").limit(50).execute()
+            if transcript_result.data:
+                # Get unique session IDs
+                unique_sessions = list(set([row["session_id"] for row in transcript_result.data if row["session_id"]]))
+                transcript_sessions = unique_sessions
+        except Exception as transcript_error:
+            print(f"Transcript query error: {transcript_error}")
+        
+        return {
+            "active_sessions": active_sessions,
+            "database_sessions": db_sessions,
+            "sessions_with_transcripts": transcript_sessions,
+            "total_active": len(active_sessions),
+            "total_database": len(db_sessions),
+            "total_with_transcripts": len(transcript_sessions),
+            "sample_test_ids": [
+                "session_demo_001",
+                "session_test_123", 
+                "session_sample_456"
+            ]
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error listing sessions: {str(e)}")
 
 # Include Clerk authentication routers if available
 if CLERK_INTEGRATION_AVAILABLE:
