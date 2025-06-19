@@ -48,6 +48,7 @@ except ImportError:
     GEMINI_AVAILABLE = False
 
 # Import Clerk integration modules
+from conversation_integration import conversation_integrator
 try:
     from clerk_webhooks import webhook_router
     from user_api import user_router
@@ -404,6 +405,38 @@ Remember: This is a real-time voice conversation with full transcription enabled
         # Remove WebSocket connection
         if session_id in self.websocket_connections:
             del self.websocket_connections[session_id]
+        
+        # Clean up conversation flow state
+        try:
+            await conversation_integrator.handle_session_end(session_id)
+            print(f"🎯 Conversation flow cleanup completed for session {session_id}")
+        except Exception as e:
+            print(f"❌ Error cleaning up conversation flow: {e}")
+
+    async def process_user_message_with_flow(self, session_id: str, user_text: str):
+        """Process user message through conversation flow and inject guidance if needed"""
+        try:
+            # Process user message through conversation integrator
+            flow_result = await conversation_integrator.process_user_message(session_id, user_text)
+            
+            if flow_result and flow_result.get('should_inject_context'):
+                context_injection = flow_result.get('context_injection', '')
+                
+                # Send context injection to Gemini session
+                if session_id in self.gemini_sessions and context_injection:
+                    session_info = self.gemini_sessions[session_id]
+                    session = session_info['session']
+                    
+                    print(f"🎯 Injecting conversation guidance for session {session_id}")
+                    print(f"📋 Guidance preview: {context_injection[:100]}...")
+                    
+                    # Send context injection as a system message to guide the next AI response
+                    await session.send_text(context_injection)
+                    
+        except Exception as e:
+            print(f"❌ Error processing user message with conversation flow: {e}")
+            # Don't let conversation flow errors break the main conversation
+            pass
 
     async def start_audio_streaming(self, session_id: str, websocket: WebSocket):
         """Start background audio streaming for a session"""
@@ -463,6 +496,9 @@ Remember: This is a real-time voice conversation with full transcription enabled
                                 user_transcript = server_content.input_transcription.text
                                 await self.add_buffered_transcript(session_id, "user", user_transcript, "gemini_live_input_transcription", user_id=user_id)
                                 transcript_found = True
+                                
+                                # Process user message through conversation flow
+                                await self.process_user_message_with_flow(session_id, user_transcript)
                         
                         # Handle model turn content (for text responses)
                         if hasattr(server_content, 'model_turn') and server_content.model_turn:
@@ -569,11 +605,19 @@ Remember: This is a real-time voice conversation with full transcription enabled
                     'conversation_id': conversation['id']  # Store for reference
                 }
                 
-                # Create Gemini session
-                prompt_config = self.prompts.get(mode, self.prompts.get('amazon_interviewer', {}))
-                system_instruction = prompt_config.get('system_instruction', 'You are a helpful AI interviewer.')
+                # Initialize conversation flow management
+                conversation_session = await conversation_integrator.handle_session_start(session_id, mode, user_id)
+                print(f"🎯 Conversation flow initialized: {conversation_session.get('session_initialized', False)}")
                 
-                gemini_session = await self.create_gemini_session(session_id, system_instruction)
+                # Create Gemini session with enhanced context
+                prompt_config = self.prompts.get(mode, self.prompts.get('amazon_interviewer', {}))
+                base_system_instruction = prompt_config.get('system_instruction', 'You are a helpful AI interviewer.')
+                
+                # Add conversation flow context to system instruction
+                initial_context = conversation_session.get('initial_context', '')
+                enhanced_system_instruction = f"{base_system_instruction}\n\n{initial_context}"
+                
+                gemini_session = await self.create_gemini_session(session_id, enhanced_system_instruction)
                 
                 if not gemini_session:
                     print(f"❌ Failed to create AI session for {session_id}")

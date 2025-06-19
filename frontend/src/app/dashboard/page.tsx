@@ -354,6 +354,14 @@ export default function Dashboard() {
       color: "bg-background border-border hover:bg-secondary hover:border-accent transition-all duration-200"
     },
     {
+      id: "guesstimate_interviewer",
+      name: "Guesstimate Interview",
+      description: "Market Sizing & Estimation",
+      icon: "📊",
+      difficulty: "Medium",
+      color: "bg-background border-border hover:bg-secondary hover:border-accent transition-all duration-200"
+    },
+    {
       id: "technical_screening",
       name: "Technical Screening",
       description: "General Programming Questions",
