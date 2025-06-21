@@ -37,7 +37,7 @@ CREATE TYPE difficulty_level AS ENUM ('easy', 'medium', 'hard');
 
 CREATE TABLE conversations (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     session_id VARCHAR(255) UNIQUE NOT NULL,
     mode VARCHAR(100) NOT NULL, -- 'amazon_interviewer', 'technical_screening', etc.
     status conversation_status DEFAULT 'active',
@@ -64,7 +64,7 @@ CREATE TYPE speaker_type AS ENUM ('user', 'assistant');
 CREATE TABLE transcripts (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     session_id VARCHAR(255) NOT NULL,
     sequence_number INTEGER,
     speaker speaker_type NOT NULL,
@@ -86,7 +86,7 @@ CREATE INDEX idx_transcripts_sequence ON transcripts(conversation_id, sequence_n
 CREATE TABLE interview_feedback (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     technical_score DECIMAL(3,2), -- 0.00 to 10.00
     communication_score DECIMAL(3,2), -- 0.00 to 10.00
     problem_solving_score DECIMAL(3,2), -- 0.00 to 10.00

@@ -98,11 +98,8 @@ class SimpleSupabaseBackend:
         self.audio_out_queues: Dict[str, asyncio.Queue] = {}
         self.audio_streaming_tasks: Dict[str, asyncio.Task] = {}
         
-        # Transcript accumulation for complete responses
-        self.transcript_buffers: Dict[str, Dict[str, str]] = {}  # session_id -> {speaker: accumulated_text}
-        
-        # Transcript timing for buffer management
-        self.transcript_timers: Dict[str, Dict[str, Any]] = {}  # session_id -> {speaker: timer_info}
+        # Simplified transcript tracking (no buffering needed with clean transcripts)
+        self.last_transcripts: Dict[str, Dict[str, str]] = {}  # session_id -> {speaker: last_text} for deduplication
         
         # Load interview prompts
         self.prompts = self.load_prompts()
@@ -176,12 +173,11 @@ class SimpleSupabaseBackend:
                     print(f"✅ Found user UUID: {user_uuid} for Clerk ID: {user_id}")
                 else:
                     print(f"❌ User not found with Clerk ID: {user_id}")
-                    print("🚫 Conversation creation failed - user must exist in database")
-                    return None
+                    print("⚠️ Proceeding with anonymous session")
             else:
-                print("❌ No user_id provided")
-                print("🚫 Conversation creation failed - user authentication required")
-                return None
+                print("⚠️ No user_id provided - creating anonymous session")
+            
+            # Note: user_id is now optional in the database schema
             
             print(f"📝 Inserting conversation data: {conversation_data}")
             
@@ -299,16 +295,18 @@ class SimpleSupabaseBackend:
             return None
     
     async def create_gemini_session(self, session_id: str, system_instruction: str):
-        """Create a Gemini Live session with audio and transcription enabled"""
+        """Create a Gemini Live session with audio and clean transcription"""
         if not self.gemini_client:
             return None
             
         try:
-            # Enhanced configuration with audio and transcription
+            from google.genai import types
+            
+            # Enhanced configuration - try audio only first, then add text if supported
             config = LiveConnectConfig(
                 response_modalities=["AUDIO"],
-                input_audio_transcription={},    # Enable user speech transcription
-                output_audio_transcription={},   # Enable AI speech transcription
+                input_audio_transcription=types.AudioTranscriptionConfig(),    # Clean user speech transcription
+                output_audio_transcription=types.AudioTranscriptionConfig(),   # Clean AI speech transcription
                 system_instruction=system_instruction + """
 
 IMPORTANT REAL-TIME CONVERSATION RULES:
@@ -321,7 +319,7 @@ IMPORTANT REAL-TIME CONVERSATION RULES:
 7. Keep responses concise to allow for natural turn-taking
 8. Be prepared to be interrupted at any time - this is normal in conversation
 
-Remember: This is a real-time voice conversation with full transcription enabled."""
+Remember: This is a real-time voice conversation with enhanced transcription enabled."""
             )
             
             # Create the context manager but don't enter it yet
@@ -385,22 +383,9 @@ Remember: This is a real-time voice conversation with full transcription enabled
             del self.active_sessions[session_id]
             print(f"✅ Removed session {session_id} from active sessions")
         
-        # Clean up transcript buffers and timers
-        if session_id in self.transcript_buffers:
-            # Cancel any pending timers
-            if session_id in self.transcript_timers:
-                for speaker_timers in self.transcript_timers[session_id].values():
-                    if speaker_timers.get('timer'):
-                        speaker_timers['timer'].cancel()
-                del self.transcript_timers[session_id]
-            
-            # Save any remaining buffered text
-            for speaker, buffered_text in self.transcript_buffers[session_id].items():
-                if buffered_text.strip():
-                    await self.add_transcript(session_id, speaker, buffered_text.strip(), "session_cleanup")
-                    print(f"📝 {speaker.title()}: {buffered_text.strip()}")
-            
-            del self.transcript_buffers[session_id]
+        # Clean up transcript tracking
+        if session_id in self.last_transcripts:
+            del self.last_transcripts[session_id]
         
         # Remove WebSocket connection
         if session_id in self.websocket_connections:
@@ -476,44 +461,24 @@ Remember: This is a real-time voice conversation with full transcription enabled
                         if session_id in self.audio_out_queues:
                             await self.audio_out_queues[session_id].put(response.data)
                     
-                    # Handle transcripts using official Gemini Live API structure
-                    transcript_found = False
-                    
-                    # Check for server_content (official API structure)
+                    # Handle transcription responses using AudioTranscriptionConfig
                     if hasattr(response, 'server_content') and response.server_content:
                         server_content = response.server_content
                         
-                        # Handle AI output transcription (AI speech-to-text)
+                        # Handle AI output transcription (should be cleaner with AudioTranscriptionConfig)
                         if hasattr(server_content, 'output_transcription') and server_content.output_transcription:
                             if hasattr(server_content.output_transcription, 'text') and server_content.output_transcription.text:
                                 ai_transcript = server_content.output_transcription.text
-                                await self.add_buffered_transcript(session_id, "assistant", ai_transcript, "gemini_live_output_transcription", user_id=user_id)
-                                transcript_found = True
+                                await self.add_clean_transcript(session_id, "assistant", ai_transcript, "gemini_clean_output", user_id=user_id)
                         
-                        # Handle user input transcription (user speech-to-text)
+                        # Handle user input transcription (should be cleaner with AudioTranscriptionConfig)
                         if hasattr(server_content, 'input_transcription') and server_content.input_transcription:
                             if hasattr(server_content.input_transcription, 'text') and server_content.input_transcription.text:
                                 user_transcript = server_content.input_transcription.text
-                                await self.add_buffered_transcript(session_id, "user", user_transcript, "gemini_live_input_transcription", user_id=user_id)
-                                transcript_found = True
+                                await self.add_clean_transcript(session_id, "user", user_transcript, "gemini_clean_input", user_id=user_id)
                                 
                                 # Process user message through conversation flow
                                 await self.process_user_message_with_flow(session_id, user_transcript)
-                        
-                        # Handle model turn content (for text responses)
-                        if hasattr(server_content, 'model_turn') and server_content.model_turn:
-                            model_turn = server_content.model_turn
-                            
-                            # Check if model_turn has parts with text
-                            if hasattr(model_turn, 'parts') and model_turn.parts:
-                                for part in model_turn.parts:
-                                    if hasattr(part, 'text') and part.text:
-                                        await self.add_buffered_transcript(session_id, "assistant", part.text, "gemini_live_model_turn", user_id=user_id)
-                                        transcript_found = True
-                    
-                    # Fallback: Check direct response.text (legacy support)
-                    if not transcript_found and response.text:
-                        await self.add_buffered_transcript(session_id, "assistant", response.text, "gemini_live_direct_text", user_id=user_id)
                     
         except Exception as e:
             print(f"❌ Error receiving audio for session {session_id}: {e}")
@@ -751,77 +716,29 @@ Remember: This is a real-time voice conversation with full transcription enabled
                     'data': {'message': str(e)}
                 })
 
-    async def add_buffered_transcript(self, session_id: str, speaker: str, text: str, provider: str = None, user_id: str = None):
-        """Add transcript with buffering to accumulate partial responses into complete sentences"""
+    async def add_clean_transcript(self, session_id: str, speaker: str, text: str, provider: str = None, user_id: str = None):
+        """Add clean transcript with deduplication (no buffering needed)"""
         if not text or not text.strip():
             return
             
-        # Clean the text
-        new_text = text.strip()
+        clean_text = text.strip()
         
-        # Ignore very short fragments (likely incomplete) unless they contain sentence endings
-        if len(new_text) <= 2 and not any(end in new_text for end in ['.', '!', '?']):
-            return
+        # Initialize tracking if needed
+        if session_id not in self.last_transcripts:
+            self.last_transcripts[session_id] = {}
+        
+        # Check for duplicates
+        last_text = self.last_transcripts[session_id].get(speaker, "")
+        if clean_text == last_text:
+            return  # Skip duplicate
+        
+        # Save clean transcript directly
+        if len(clean_text) > 3:  # Only save meaningful text
+            await self.add_transcript(session_id, speaker, clean_text, provider, user_id=user_id)
+            print(f"📝 {speaker.title()}: {clean_text}")
             
-        # Initialize buffers if needed
-        if session_id not in self.transcript_buffers:
-            self.transcript_buffers[session_id] = {}
-            self.transcript_timers[session_id] = {}
-        
-        if speaker not in self.transcript_buffers[session_id]:
-            self.transcript_buffers[session_id][speaker] = ""
-            self.transcript_timers[session_id][speaker] = {'last_update': datetime.now(), 'timer': None}
-        
-        # APPEND to buffer instead of replacing (Gemini sends incremental 3-char chunks)
-        current_buffer = self.transcript_buffers[session_id][speaker]
-        
-        # Smart concatenation - no space needed since Gemini includes them
-        self.transcript_buffers[session_id][speaker] = current_buffer + new_text
-        
-        # Update timing
-        self.transcript_timers[session_id][speaker]['last_update'] = datetime.now()
-        
-        # Cancel existing timer
-        if self.transcript_timers[session_id][speaker]['timer']:
-            self.transcript_timers[session_id][speaker]['timer'].cancel()
-        
-        # Get the accumulated text
-        accumulated_text = self.transcript_buffers[session_id][speaker].strip()
-        
-        # Check if we should save immediately (complete sentence indicators)
-        should_save_now = (
-            accumulated_text.endswith('.') or 
-            accumulated_text.endswith('!') or 
-            accumulated_text.endswith('?') or
-            len(accumulated_text) > 300 or  # Save very long responses
-            # Look for complete sentence patterns (sentence + space)
-            '. ' in accumulated_text or '! ' in accumulated_text or '? ' in accumulated_text
-        )
-        
-        if should_save_now:
-            # Save immediately if we have a complete sentence
-            if accumulated_text and len(accumulated_text) > 8:  # Require meaningful length
-                await self.add_transcript(session_id, speaker, accumulated_text, provider, user_id=user_id)
-                print(f"📝 {speaker.title()}: {accumulated_text}")
-            # Clear the buffer
-            self.transcript_buffers[session_id][speaker] = ""
-            self.transcript_timers[session_id][speaker]['timer'] = None
-        else:
-            # Set a timer to save after 6 seconds of no updates (longer for complete sentences)
-            async def save_buffered():
-                await asyncio.sleep(6)
-                if session_id in self.transcript_buffers and speaker in self.transcript_buffers[session_id]:
-                    buffered_text = self.transcript_buffers[session_id][speaker].strip()
-                    if buffered_text and len(buffered_text) > 8:  # Require meaningful length
-                        await self.add_transcript(session_id, speaker, buffered_text, provider, user_id=user_id)
-                        print(f"📝 {speaker.title()}: {buffered_text}")
-                    self.transcript_buffers[session_id][speaker] = ""
-                    if session_id in self.transcript_timers and speaker in self.transcript_timers[session_id]:
-                        self.transcript_timers[session_id][speaker]['timer'] = None
-            
-            # Start the timer task
-            timer_task = asyncio.create_task(save_buffered())
-            self.transcript_timers[session_id][speaker]['timer'] = timer_task
+            # Update tracking
+            self.last_transcripts[session_id][speaker] = clean_text
 
 # Global backend instance (will be initialized in lifespan)
 backend = None
